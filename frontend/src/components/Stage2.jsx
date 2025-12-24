@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './Stage2.css';
@@ -55,7 +55,7 @@ function deAnonymizeText(text, labelToModel) {
   return result;
 }
 
-export default function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false }) {
+function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!rankings || rankings.length === 0) {
@@ -151,3 +151,5 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings, hasC
     </div>
   );
 }
+
+export default memo(Stage2);

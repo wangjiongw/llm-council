@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Stage1 from './Stage1';
@@ -6,6 +6,122 @@ import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import ConversationContext from './ConversationContext';
 import './ChatInterface.css';
+
+// Memoized message item to prevent re-renders when typing
+const MessageItem = memo(function MessageItem({
+  msg,
+  turnNumber,
+  hasPreviousTurns,
+  conversationContext,
+  isLoading,
+  onRetryQuery,
+  isLastMessage,
+}) {
+  const isUserMessage = msg.role === 'user';
+
+  return (
+    <div className="message-group">
+      {/* Turn indicator for user messages */}
+      {isUserMessage && hasPreviousTurns && (
+        <div className="turn-indicator">
+          <span className="turn-number">Turn {turnNumber}</span>
+          <span className="turn-continuation">
+            {turnNumber === 1 ? 'Starting conversation' : 'Continuing conversation'}
+          </span>
+        </div>
+      )}
+
+      {isUserMessage ? (
+        <div className="user-message">
+          <div className="message-label">
+            <span className="role-icon">👤</span>
+            <span>You</span>
+            {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
+          </div>
+          <div className="message-content">
+            <div className="markdown-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="assistant-message">
+          <div className="message-label">
+            <span className="role-icon">🤖</span>
+            <span>LLM Council</span>
+            {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
+            {hasPreviousTurns && (
+              <span className="context-indicator">
+                {turnNumber === 1 ? 'First response' : 'Context-aware response'}
+              </span>
+            )}
+          </div>
+
+          {/* Enhanced loading states with context awareness */}
+          {msg.loading?.stage1 && (
+            <div className="stage-loading">
+              <div className="spinner"></div>
+              <span>
+                {hasPreviousTurns
+                  ? `Running Stage 1 with ${conversationContext.turnCount} previous turns of context...`
+                  : 'Running Stage 1: Collecting individual responses...'
+                }
+              </span>
+            </div>
+          )}
+          {msg.stage1 && <Stage1 responses={msg.stage1} />}
+
+          {msg.loading?.stage2 && (
+            <div className="stage-loading">
+              <div className="spinner"></div>
+              <span>
+                {hasPreviousTurns
+                  ? 'Running Stage 2: Peer rankings with conversation context...'
+                  : 'Running Stage 2: Peer rankings...'
+                }
+              </span>
+            </div>
+          )}
+          {msg.stage2 && (
+            <Stage2
+              rankings={msg.stage2}
+              labelToModel={msg.metadata?.label_to_model}
+              aggregateRankings={msg.metadata?.aggregate_rankings}
+              hasContext={hasPreviousTurns}
+            />
+          )}
+
+          {msg.loading?.stage3 && (
+            <div className="stage-loading">
+              <div className="spinner"></div>
+              <span>
+                {hasPreviousTurns
+                  ? 'Running Stage 3: Final synthesis with full conversation context...'
+                  : 'Running Stage 3: Final synthesis...'
+                }
+              </span>
+            </div>
+          )}
+          {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasPreviousTurns} />}
+
+          {/* Retry button for completed assistant messages */}
+          {msg.stage3 && !isLoading && isLastMessage && (
+            <div className="message-actions">
+              <button
+                className="retry-button"
+                onClick={onRetryQuery}
+                title="Retry this query for a different response"
+                aria-label="Retry this query"
+              >
+                🔄 Retry
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 
 export default function ChatInterface({
   conversation,
@@ -26,8 +142,8 @@ export default function ChatInterface({
     scrollToBottom();
   }, [conversation]);
 
-  // Extract conversation context for display
-  const getConversationContext = () => {
+  // Memoize context calculation to avoid re-computing on every render
+  const conversationContext = useMemo(() => {
     if (!conversation || conversation.messages.length === 0) {
       return null;
     }
@@ -66,23 +182,25 @@ export default function ChatInterface({
       turnCount: turns.length,
       isInProgress
     };
-  };
+  }, [conversation]);
 
-  const handleSubmit = (e) => {
+  const hasPreviousTurns = conversationContext && conversationContext.turnCount > 0;
+
+  const handleSubmit = useCallback((e) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
       onSendMessage(input);
       setInput('');
     }
-  };
+  }, [input, isLoading, onSendMessage]);
 
-  const handleKeyDown = (e) => {
+  const handleKeyDown = useCallback((e) => {
     // Submit on Enter (without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
-  };
+  }, [handleSubmit]);
 
   if (!conversation) {
     return (
@@ -94,9 +212,6 @@ export default function ChatInterface({
       </div>
     );
   }
-
-  const conversationContext = getConversationContext();
-  const hasPreviousTurns = conversationContext && conversationContext.turnCount > 0;
 
   return (
     <div className="chat-interface">
@@ -121,113 +236,18 @@ export default function ChatInterface({
 
             {/* Display all messages with turn indicators */}
             <div className="messages-history">
-              {conversation.messages.map((msg, index) => {
-                const isUserMessage = msg.role === 'user';
-                const turnNumber = Math.floor(index / 2) + 1;
-
-                return (
-                  <div key={index} className="message-group">
-                    {/* Turn indicator for user messages */}
-                    {isUserMessage && hasPreviousTurns && (
-                      <div className="turn-indicator">
-                        <span className="turn-number">Turn {turnNumber}</span>
-                        <span className="turn-continuation">
-                          {turnNumber === 1 ? 'Starting conversation' : 'Continuing conversation'}
-                        </span>
-                      </div>
-                    )}
-
-                    {isUserMessage ? (
-                      <div className="user-message">
-                        <div className="message-label">
-                          <span className="role-icon">👤</span>
-                          <span>You</span>
-                          {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
-                        </div>
-                        <div className="message-content">
-                          <div className="markdown-content">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="assistant-message">
-                        <div className="message-label">
-                          <span className="role-icon">🤖</span>
-                          <span>LLM Council</span>
-                          {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
-                          {hasPreviousTurns && (
-                            <span className="context-indicator">
-                              {turnNumber === 1 ? 'First response' : 'Context-aware response'}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Enhanced loading states with context awareness */}
-                        {msg.loading?.stage1 && (
-                          <div className="stage-loading">
-                            <div className="spinner"></div>
-                            <span>
-                              {hasPreviousTurns
-                                ? `Running Stage 1 with ${conversationContext.turnCount} previous turns of context...`
-                                : 'Running Stage 1: Collecting individual responses...'
-                              }
-                            </span>
-                          </div>
-                        )}
-                        {msg.stage1 && <Stage1 responses={msg.stage1} />}
-
-                        {msg.loading?.stage2 && (
-                          <div className="stage-loading">
-                            <div className="spinner"></div>
-                            <span>
-                              {hasPreviousTurns
-                                ? 'Running Stage 2: Peer rankings with conversation context...'
-                                : 'Running Stage 2: Peer rankings...'
-                              }
-                            </span>
-                          </div>
-                        )}
-                        {msg.stage2 && (
-                          <Stage2
-                            rankings={msg.stage2}
-                            labelToModel={msg.metadata?.label_to_model}
-                            aggregateRankings={msg.metadata?.aggregate_rankings}
-                            hasContext={hasPreviousTurns}
-                          />
-                        )}
-
-                        {msg.loading?.stage3 && (
-                          <div className="stage-loading">
-                            <div className="spinner"></div>
-                            <span>
-                              {hasPreviousTurns
-                                ? 'Running Stage 3: Final synthesis with full conversation context...'
-                                : 'Running Stage 3: Final synthesis...'
-                              }
-                            </span>
-                          </div>
-                        )}
-                        {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasPreviousTurns} />}
-
-                        {/* Retry button for completed assistant messages */}
-                        {msg.stage3 && !isLoading && index === conversation.messages.length - 1 && (
-                          <div className="message-actions">
-                            <button
-                              className="retry-button"
-                              onClick={onRetryQuery}
-                              title="Retry this query for a different response"
-                              aria-label="Retry this query"
-                            >
-                              🔄 Retry
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {conversation.messages.map((msg, index) => (
+                <MessageItem
+                  key={index}
+                  msg={msg}
+                  turnNumber={Math.floor(index / 2) + 1}
+                  hasPreviousTurns={hasPreviousTurns}
+                  conversationContext={conversationContext}
+                  isLoading={isLoading}
+                  onRetryQuery={onRetryQuery}
+                  isLastMessage={index === conversation.messages.length - 1}
+                />
+              ))}
             </div>
           </>
         )}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './Stage3.css';
@@ -43,7 +43,7 @@ const CopyButton = ({ content, onCopy }) => {
   );
 };
 
-export default function Stage3({ finalResponse, hasContext = false }) {
+function Stage3({ finalResponse, hasContext = false }) {
   if (!finalResponse) {
     return null;
   }
@@ -80,3 +80,5 @@ export default function Stage3({ finalResponse, hasContext = false }) {
     </div>
   );
 }
+
+export default memo(Stage3);

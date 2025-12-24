@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './Stage1.css';
@@ -43,7 +43,7 @@ const CopyButton = ({ content, onCopy }) => {
   );
 };
 
-export default function Stage1({ responses }) {
+function Stage1({ responses }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!responses || responses.length === 0) {
@@ -81,3 +81,5 @@ export default function Stage1({ responses }) {
     </div>
   );
 }
+
+export default memo(Stage1);
