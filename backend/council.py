@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any, Tuple
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import TITLE_MODEL, COUNCIL_MODELS, CHAIRMAN_MODEL
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -275,7 +275,7 @@ Title:"""
     messages = [{"role": "user", "content": title_prompt}]
 
     # Use gemini-2.5-flash for title generation (fast and cheap)
-    response = await query_model("google/gemini-2.5-flash", messages, timeout=30.0)
+    response = await query_model(TITLE_MODEL, messages, timeout=30.0)
 
     if response is None:
         # Fallback to a generic title
@@ -324,6 +324,266 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         user_query,
         stage1_results,
         stage2_results
+    )
+
+    # Prepare metadata
+    metadata = {
+        "label_to_model": label_to_model,
+        "aggregate_rankings": aggregate_rankings
+    }
+
+    return stage1_results, stage2_results, stage3_result, metadata
+
+
+async def stage1_collect_responses_with_history(
+    user_query: str,
+    conversation_history: List[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Stage 1 with optional conversation history context.
+
+    Args:
+        user_query: The user's question
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        List of dicts with 'model' and 'response' keys
+    """
+    # Build messages with conversation context
+    messages = []
+
+    if conversation_history:
+        # Add conversation context
+        context_text = "Previous conversation context:\n\n"
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            context_text += f"{role}: {msg['content']}\n\n"
+
+        context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
+        messages.append({"role": "user", "content": context_text})
+    else:
+        # No conversation history, use original format
+        messages = [{"role": "user", "content": user_query}]
+
+    # Query all models in parallel
+    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+
+    # Format results
+    stage1_results = []
+    for model, response in responses.items():
+        if response is not None:  # Only include successful responses
+            stage1_results.append({
+                "model": model,
+                "response": response.get('content', '')
+            })
+
+    return stage1_results
+
+
+async def stage2_collect_rankings_with_history(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+    conversation_history: List[Dict[str, Any]] = None
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """
+    Stage 2 with optional conversation history context.
+
+    Args:
+        user_query: The original user query
+        stage1_results: Results from Stage 1
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        Tuple of (rankings list, label_to_model mapping)
+    """
+    # Create anonymized labels for responses (Response A, Response B, etc.)
+    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, stage1_results)}
+
+    # Build the ranking prompt with conversation context
+    prompt_parts = []
+
+    if conversation_history:
+        prompt_parts.append("Previous conversation context:")
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            prompt_parts.append(f"{role}: {msg['content']}")
+        prompt_parts.append("")
+
+    prompt_parts.extend([
+        f"Current question: {user_query}",
+        "",
+        "Here are the anonymized responses from the council members:",
+        ""
+    ])
+
+    # Add anonymized responses
+    for label, result in zip(labels, stage1_results):
+        prompt_parts.append(f"**Response {label}:**")
+        prompt_parts.append(result["response"])
+        prompt_parts.append("")
+
+    # Add evaluation instructions
+    prompt_parts.extend([
+        "Please evaluate each response based on:",
+        "1. Accuracy and factual correctness",
+        "2. Insightfulness and depth",
+        "3. Clarity and coherence",
+        "4. Relevance to the question and conversation context",
+        "",
+        "Consider the conversation context when evaluating responses.",
+        "",
+        "After evaluating each response, please provide a final ranking from best to worst.",
+        "",
+        "**FINAL RANKING:**",
+        "1. Response X (best)",
+        "2. Response Y",
+        "3. Response Z",
+        "... (worst)",
+        "",
+        "Do not include any text after the ranking section."
+    ])
+
+    # Join all parts into the final prompt
+    messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
+
+    # Query all models in parallel
+    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+
+    # Format results
+    stage2_results = []
+    for model, response in responses.items():
+        if response is not None:
+            parsed_ranking = parse_ranking_from_text(response.get('content', ''))
+            stage2_results.append({
+                "model": model,
+                "ranking": response.get('content', ''),
+                "parsed_ranking": parsed_ranking
+            })
+
+    return stage2_results, label_to_model
+
+
+async def stage3_synthesize_final_with_history(
+    user_query: str,
+    stage1_results: List[Dict[str, Any]],
+    stage2_results: List[Dict[str, Any]],
+    conversation_history: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Stage 3 with conversation history context.
+
+    Args:
+        user_query: The user's question
+        stage1_results: Results from Stage 1
+        stage2_results: Results from Stage 2
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        Dict with 'model' and 'response' keys
+    """
+    # Build synthesis prompt with conversation context
+    prompt_parts = []
+
+    if conversation_history:
+        prompt_parts.append("Conversation History:")
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            prompt_parts.append(f"{role}: {msg['content']}")
+        prompt_parts.append("")
+        prompt_parts.append("---")
+
+    prompt_parts.extend([
+        "Current Exchange:",
+        f"Question: {user_query}",
+        "",
+        "STAGE 1 - Individual Responses:",
+    ])
+
+    # Add individual model responses with attribution
+    for result in stage1_results:
+        prompt_parts.append(f"**{result['model']}:**")
+        prompt_parts.append(result['response'])
+        prompt_parts.append("")
+
+    prompt_parts.extend([
+        "STAGE 2 - Peer Rankings:",
+    ])
+
+    # Add peer rankings
+    for result in stage2_results:
+        prompt_parts.append(f"**{result['model']}:**")
+        prompt_parts.append(result['ranking'])
+        prompt_parts.append("")
+
+    # Add synthesis instructions with conversation context
+    if conversation_history:
+        prompt_parts.extend([
+            "Please synthesize a comprehensive response to the current question that:",
+            "1. Considers the ongoing conversation context and flow",
+            "2. Integrates the best insights from the individual responses",
+            "3. Takes into account the peer evaluations",
+            "4. Provides a coherent, natural continuation of the conversation",
+            "",
+            "Your response should acknowledge the conversation history while providing a thorough answer to the current question."
+        ])
+    else:
+        prompt_parts.extend([
+            "Please synthesize a comprehensive response to the current question that:",
+            "1. Integrates the best insights from the individual responses",
+            "2. Takes into account the peer evaluations",
+            "3. Provides a clear, coherent answer",
+            "",
+            "Your response should reflect the collective wisdom of the council while addressing the user's question directly."
+        ])
+
+    # Create final prompt
+    messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
+
+    # Query chairman model
+    response = await query_model(CHAIRMAN_MODEL, messages)
+
+    return {
+        "model": CHAIRMAN_MODEL,
+        "response": response.get('content', '') if response else ''
+    }
+
+
+async def run_full_council_with_history(
+    user_query: str,
+    conversation_history: List[Dict[str, Any]] = None
+) -> Tuple[List, List, Dict, Dict]:
+    """
+    Run the complete 3-stage council process with conversation history support.
+
+    Args:
+        user_query: The user's question
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        Tuple of (stage1_results, stage2_results, stage3_result, metadata)
+    """
+    # Stage 1: Collect individual responses with history context
+    stage1_results = await stage1_collect_responses_with_history(user_query, conversation_history)
+
+    # If no models responded successfully, return error
+    if not stage1_results:
+        return [], [], {
+            "model": "error",
+            "response": "All models failed to respond. Please try again."
+        }, {}
+
+    # Stage 2: Collect rankings with history context
+    stage2_results, label_to_model = await stage2_collect_rankings_with_history(
+        user_query, stage1_results, conversation_history
+    )
+
+    # Calculate aggregate rankings
+    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+
+    # Stage 3: Synthesize final answer with history context
+    stage3_result = await stage3_synthesize_final_with_history(
+        user_query, stage1_results, stage2_results, conversation_history
     )
 
     # Prepare metadata

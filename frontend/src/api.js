@@ -4,6 +4,8 @@
 
 const API_BASE = 'http://localhost:8001';
 
+let currentAbortController = null;
+
 export const api = {
   /**
    * List all conversations.
@@ -71,9 +73,13 @@ export const api = {
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @param {AbortController} abortController - Optional AbortController to cancel the request
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, onEvent, abortController = null) {
+    const controller = abortController || new AbortController();
+    currentAbortController = controller;
+
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -82,34 +88,71 @@ export const api = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ content }),
+        signal: controller.signal,
       }
     );
 
     if (!response.ok) {
+      if (controller.signal.aborted) {
+        throw new Error('Query stopped by user');
+      }
       throw new Error('Failed to send message');
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+        if (controller.signal.aborted) {
+          throw new Error('Query stopped by user');
+        }
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          try {
-            const event = JSON.parse(data);
-            onEvent(event.type, event);
-          } catch (e) {
-            console.error('Failed to parse SSE event:', e);
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            try {
+              const event = JSON.parse(data);
+              onEvent(event.type, event);
+            } catch (e) {
+              console.error('Failed to parse SSE event:', e);
+            }
           }
         }
       }
+    } catch (error) {
+      if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
+        console.log('Stream aborted by user');
+        throw new Error('Query stopped by user');
+      }
+      throw error;
+    } finally {
+      if (currentAbortController === controller) {
+        currentAbortController = null;
+      }
     }
+  },
+
+  /**
+   * Cancel the current streaming request.
+   */
+  cancelStream() {
+    if (currentAbortController) {
+      currentAbortController.abort();
+      currentAbortController = null;
+    }
+  },
+
+  /**
+   * Check if there's an active stream.
+   */
+  isStreaming() {
+    return currentAbortController !== null;
   },
 };

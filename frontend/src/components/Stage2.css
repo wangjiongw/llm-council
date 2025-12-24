@@ -2,6 +2,23 @@
   background: #fafafa;
 }
 
+.stage-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.context-badge {
+  background: #52c41a;
+  color: white;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .stage2 h4 {
   margin: 20px 0 8px 0;
   color: #333;
@@ -111,17 +128,70 @@
   margin-bottom: 20px;
 }
 
+.ranking-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
 .ranking-model {
   color: #888;
   font-size: 12px;
   font-family: monospace;
-  margin-bottom: 12px;
 }
 
 .ranking-content {
   color: #333;
   line-height: 1.6;
   font-size: 14px;
+}
+
+.copy-button {
+  background: #f0f0f0;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  color: #666;
+}
+
+.copy-button:hover {
+  background: #e8e8e8;
+  border-color: #4a90e2;
+  color: #4a90e2;
+}
+
+.copy-button:active {
+  background: #d0e0f0;
+  transform: translateY(1px);
+}
+
+.copy-button.copied {
+  background: #52c41a;
+  border-color: #52c41a;
+  color: white;
+  animation: copySuccess 0.3s ease;
+}
+
+@keyframes copySuccess {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .parsed-ranking {

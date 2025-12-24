@@ -52,11 +52,64 @@
   border: 1px solid #e0e0e0;
 }
 
+.response-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
 .model-name {
   color: #888;
   font-size: 12px;
-  margin-bottom: 12px;
   font-family: monospace;
+}
+
+.copy-button {
+  background: #f0f0f0;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  color: #666;
+}
+
+.copy-button:hover {
+  background: #e8e8e8;
+  border-color: #4a90e2;
+  color: #4a90e2;
+}
+
+.copy-button:active {
+  background: #d0e0f0;
+  transform: translateY(1px);
+}
+
+.copy-button.copied {
+  background: #52c41a;
+  border-color: #52c41a;
+  color: white;
+  animation: copySuccess 0.3s ease;
+}
+
+@keyframes copySuccess {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .response-text {

@@ -1,6 +1,46 @@
-# CLAUDE.md - Technical Notes for LLM Council
+# CLAUDE.md
 
-This file contains technical details, architectural decisions, and important implementation notes for future development sessions.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Common Commands
+
+### Development Setup
+```bash
+# Install dependencies
+uv sync                                    # Python dependencies
+cd frontend && npm install                 # Node.js dependencies
+
+# Configure environment
+# Create .env file with OPENROUTER_API_KEY from openrouter.ai
+```
+
+### Running the Application
+```bash
+# Option 1: Use the start script (recommended)
+./start.sh                                 # Starts both backend and frontend
+
+# Option 2: Run manually in separate terminals
+uv run python -m backend.main              # Backend on localhost:8001
+cd frontend && npm run dev                 # Frontend on localhost:5173
+```
+
+### Development Tasks
+```bash
+# Frontend
+cd frontend
+npm run build                             # Build for production
+npm run lint                              # Run ESLint
+npm run preview                           # Preview production build
+
+# Backend
+uv run python -m backend.main              # No linting/testing currently configured
+```
+
+### Testing API Connectivity
+```bash
+# Test OpenRouter API and model identifiers
+uv run python test_openrouter.py           # Test API key and model availability
+```
 
 ## Project Overview
 
@@ -111,13 +151,20 @@ This strict format allows reliable parsing while still getting thoughtful evalua
 
 ## Important Implementation Details
 
-### Relative Imports
-All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
+### Module Execution
+- **Critical**: Always run backend as `python -m backend.main` from project root, not from backend directory
+- All backend modules use relative imports (e.g., `from .config import ...`) for proper Python module system functionality
+- Running from backend directory will cause import errors due to relative import structure
 
 ### Port Configuration
 - Backend: 8001 (changed from 8000 to avoid conflict)
 - Frontend: 5173 (Vite default)
 - Update both `backend/main.py` and `frontend/src/api.js` if changing
+
+### Environment Configuration
+- API key should be set in `.env` file as `OPENROUTER_API_KEY=sk-or-v1-...`
+- Get API key from [openrouter.ai](https://openrouter.ai/)
+- Backend `.env` file is located in `backend/` directory
 
 ### Markdown Rendering
 All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
@@ -131,6 +178,7 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
 3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
 4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
+5. **Port Conflicts**: Backend uses port 8001 (not 8000) to avoid conflicts with other applications
 
 ## Future Enhancement Ideas
 
@@ -141,9 +189,18 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 - Custom ranking criteria (not just accuracy/insight)
 - Support for reasoning models (o1, etc.) with special handling
 
-## Testing Notes
+## Testing
 
-Use `test_openrouter.py` to verify API connectivity and test different model identifiers before adding to council. The script tests both streaming and non-streaming modes.
+### API Testing
+```bash
+# Test OpenRouter connectivity and model availability
+uv run python test_openrouter.py           # Tests API key and model identifiers
+```
+
+### Current Testing Setup
+- No formal test framework configured for backend or frontend
+- `test_openrouter.py` serves as API connectivity verification
+- Frontend has no automated tests configured (ESLint only)
 
 ## Data Flow Summary
 
@@ -164,3 +221,15 @@ Frontend: Display with tabs + validation UI
 ```
 
 The entire flow is async/parallel where possible to minimize latency.
+
+## Project Structure
+
+### Package Management
+- **Backend**: Uses `uv` for Python dependency management (see `pyproject.toml`)
+- **Frontend**: Uses `npm` for JavaScript dependencies (see `frontend/package.json`)
+
+### Key Directories
+- `backend/`: FastAPI server with council deliberation logic
+- `frontend/src/`: React frontend with Vite build system
+- `data/conversations/`: JSON storage for conversation history
+- `backend/.env`: API key configuration (create manually)
