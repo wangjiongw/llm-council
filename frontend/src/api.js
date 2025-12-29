@@ -69,6 +69,26 @@ export const api = {
   },
 
   /**
+   * Send a quick message (single-model, no 3-stage council).
+   */
+  async sendQuickMessage(conversationId, content) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/quick`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error('Failed to send quick message');
+    }
+    return response.json();
+  },
+
+  /**
    * Send a message and receive streaming updates.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content

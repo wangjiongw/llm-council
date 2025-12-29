@@ -13,20 +13,23 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
         user_query: The user's question
 
     Returns:
-        List of dicts with 'model' and 'response' keys
+        List of dicts with 'model', 'response', and additional metadata keys
     """
     messages = [{"role": "user", "content": user_query}]
 
     # Query all models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
 
-    # Format results
+    # Format results with full Response API metadata
     stage1_results = []
     for model, response in responses.items():
         if response is not None:  # Only include successful responses
             stage1_results.append({
                 "model": model,
-                "response": response.get('content', '')
+                "response": response.get('content', ''),
+                "response_id": response.get('id'),
+                "usage": response.get('usage', {}),
+                "finish_reason": response.get('finish_reason'),
             })
 
     return stage1_results
@@ -97,7 +100,7 @@ Now provide your evaluation and ranking:"""
     # Get rankings from all council models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
 
-    # Format results
+    # Format results with full Response API metadata
     stage2_results = []
     for model, response in responses.items():
         if response is not None:
@@ -106,7 +109,10 @@ Now provide your evaluation and ranking:"""
             stage2_results.append({
                 "model": model,
                 "ranking": full_text,
-                "parsed_ranking": parsed
+                "parsed_ranking": parsed,
+                "response_id": response.get('id'),
+                "usage": response.get('usage', {}),
+                "finish_reason": response.get('finish_reason'),
             })
 
     return stage2_results, label_to_model
@@ -126,7 +132,7 @@ async def stage3_synthesize_final(
         stage2_results: Rankings from Stage 2
 
     Returns:
-        Dict with 'model' and 'response' keys
+        Dict with 'model', 'response', and additional metadata keys
     """
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
@@ -168,9 +174,13 @@ Provide a clear, well-reasoned final answer that represents the council's collec
             "response": "Error: Unable to generate final synthesis."
         }
 
+    # Return with full Response API metadata
     return {
         "model": CHAIRMAN_MODEL,
-        "response": response.get('content', '')
+        "response": response.get('content', ''),
+        "response_id": response.get('id'),
+        "usage": response.get('usage', {}),
+        "finish_reason": response.get('finish_reason'),
     }
 
 
@@ -368,13 +378,16 @@ async def stage1_collect_responses_with_history(
     # Query all models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
 
-    # Format results
+    # Format results with full Response API metadata
     stage1_results = []
     for model, response in responses.items():
         if response is not None:  # Only include successful responses
             stage1_results.append({
                 "model": model,
-                "response": response.get('content', '')
+                "response": response.get('content', ''),
+                "response_id": response.get('id'),
+                "usage": response.get('usage', {}),
+                "finish_reason": response.get('finish_reason'),
             })
 
     return stage1_results
@@ -450,7 +463,7 @@ async def stage2_collect_rankings_with_history(
     # Query all models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
 
-    # Format results
+    # Format results with full Response API metadata
     stage2_results = []
     for model, response in responses.items():
         if response is not None:
@@ -458,7 +471,10 @@ async def stage2_collect_rankings_with_history(
             stage2_results.append({
                 "model": model,
                 "ranking": response.get('content', ''),
-                "parsed_ranking": parsed_ranking
+                "parsed_ranking": parsed_ranking,
+                "response_id": response.get('id'),
+                "usage": response.get('usage', {}),
+                "finish_reason": response.get('finish_reason'),
             })
 
     return stage2_results, label_to_model
@@ -543,10 +559,20 @@ async def stage3_synthesize_final_with_history(
     # Query chairman model
     response = await query_model(CHAIRMAN_MODEL, messages)
 
-    return {
-        "model": CHAIRMAN_MODEL,
-        "response": response.get('content', '') if response else ''
-    }
+    # Return with full Response API metadata
+    if response:
+        return {
+            "model": CHAIRMAN_MODEL,
+            "response": response.get('content', ''),
+            "response_id": response.get('id'),
+            "usage": response.get('usage', {}),
+            "finish_reason": response.get('finish_reason'),
+        }
+    else:
+        return {
+            "model": CHAIRMAN_MODEL,
+            "response": "Error: Unable to generate final synthesis."
+        }
 
 
 async def run_full_council_with_history(
@@ -593,3 +619,56 @@ async def run_full_council_with_history(
     }
 
     return stage1_results, stage2_results, stage3_result, metadata
+
+
+async def quick_query(
+    user_query: str,
+    conversation_history: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Quick single-model query without the 3-stage council process.
+
+    Args:
+        user_query: The user's question
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        Dict with 'model', 'response', and Response API metadata
+    """
+    from .config import QUICK_MODEL
+
+    # Build messages with conversation context
+    messages = []
+
+    if conversation_history:
+        # Add conversation context
+        context_text = "Previous conversation context:\n\n"
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            context_text += f"{role}: {msg['content']}\n\n"
+
+        context_text += f"Current question: {user_query}"
+        messages.append({"role": "user", "content": context_text})
+    else:
+        # No conversation history, use original format
+        messages = [{"role": "user", "content": user_query}]
+
+    # Query the quick model
+    response = await query_model(QUICK_MODEL, messages)
+
+    if response is None:
+        return {
+            "model": QUICK_MODEL,
+            "response": "Error: Model failed to respond. Please try again.",
+            "response_id": None,
+            "usage": {},
+            "finish_reason": None,
+        }
+
+    return {
+        "model": QUICK_MODEL,
+        "response": response.get('content', ''),
+        "response_id": response.get('id'),
+        "usage": response.get('usage', {}),
+        "finish_reason": response.get('finish_reason'),
+    }

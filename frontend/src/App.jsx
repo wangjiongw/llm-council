@@ -257,6 +257,53 @@ function App() {
     }
   };
 
+  const handleSendQuickMessage = async (content) => {
+    if (!currentConversationId) return;
+
+    setIsLoading(true);
+    setActiveStreamId(null); // No streaming for quick messages
+
+    try {
+      // Optimistically add user message to UI
+      const userMessage = { role: 'user', content };
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMessage],
+      }));
+
+      // Send quick message
+      const response = await api.sendQuickMessage(currentConversationId, content);
+
+      // Add assistant response
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: [
+          ...prev.messages,
+          {
+            role: 'assistant',
+            stage1: null,
+            stage2: null,
+            stage3: response.quick,
+            metadata: null,
+          },
+        ],
+      }));
+
+      // Reload conversations list
+      loadConversations();
+    } catch (error) {
+      console.error('Failed to send quick message:', error);
+
+      // Remove optimistic messages on error
+      setCurrentConversation((prev) => ({
+        ...prev,
+        messages: prev.messages.slice(0, -1),
+      }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="app">
       <Sidebar
@@ -268,6 +315,7 @@ function App() {
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
+        onSendQuickMessage={handleSendQuickMessage}
         onStopQuery={handleStopQuery}
         onRetryQuery={handleRetryLastQuery}
         isLoading={isLoading}

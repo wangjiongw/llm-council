@@ -42,11 +42,25 @@ async def query_model(
 
             data = response.json()
             message = data['choices'][0]['message']
+            choice = data['choices'][0]
+            content = message.get('content')
 
-            return {
-                'content': message.get('content'),
-                'reasoning_details': message.get('reasoning_details')
+            # Return full OpenAI Response API format with metadata
+            result = {
+                'id': data.get('id'),
+                'object': data.get('object'),
+                'created': data.get('created'),
+                'model': data.get('model'),
+                'content': content,
+                'reasoning_details': message.get('reasoning_details'),
+                'finish_reason': choice.get('finish_reason'),
+                'usage': data.get('usage', {}),
+                'system_fingerprint': data.get('system_fingerprint'),
+                # Backward compatibility alias
+                'response': content
             }
+
+            return result
 
     except Exception as e:
         print(f"Error querying model {model}: {e}")

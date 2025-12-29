@@ -126,6 +126,7 @@ const MessageItem = memo(function MessageItem({
 export default function ChatInterface({
   conversation,
   onSendMessage,
+  onSendQuickMessage,
   onStopQuery,
   onRetryQuery,
   isLoading,
@@ -193,6 +194,14 @@ export default function ChatInterface({
       setInput('');
     }
   }, [input, isLoading, onSendMessage]);
+
+  const handleQuickSubmit = useCallback((e) => {
+    e.preventDefault();
+    if (input.trim() && !isLoading && onSendQuickMessage) {
+      onSendQuickMessage(input);
+      setInput('');
+    }
+  }, [input, isLoading, onSendQuickMessage]);
 
   const handleKeyDown = useCallback((e) => {
     // Submit on Enter (without Shift)
@@ -306,13 +315,27 @@ export default function ChatInterface({
                 ⏹️ Stop
               </button>
             ) : (
-              <button
-                type="submit"
-                className="send-button"
-                disabled={!input.trim() || isLoading}
-              >
-                {hasPreviousTurns ? 'Continue' : 'Send'}
-              </button>
+              <div className="button-group">
+                <button
+                  type="button"
+                  className="quick-button"
+                  onClick={handleQuickSubmit}
+                  disabled={!input.trim() || isLoading}
+                  title="Quick single-model response"
+                  aria-label="Quick query"
+                >
+                  ⚡ Quick
+                </button>
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={!input.trim() || isLoading}
+                  title="Full 3-stage council response"
+                  aria-label="Send to council"
+                >
+                  🏛️ Council
+                </button>
+              </div>
             )}
           </div>
         </form>

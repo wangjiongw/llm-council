@@ -18,10 +18,13 @@ COUNCIL_MODELS = [
 TITLE_MODEL = "gemini-2.5-flash"
 # Chairman model - synthesizes final response
 CHAIRMAN_MODEL = "gemini-3-pro-preview"
+# Quick query model - for direct single-model responses
+QUICK_MODEL = "gemini-2.5-flash"
 
 # OpenRouter API endpoint
 OPENROUTER_BASE_URL = os.getenv("OPENAI_API_BASE_URL")
 OPENROUTER_API_URL = f"{OPENROUTER_BASE_URL}/chat/completions"
+OPENROUTER_RESPONSE_URL = f"{OPENROUTER_BASE_URL}/responses"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"

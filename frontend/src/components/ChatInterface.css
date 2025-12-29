@@ -325,3 +325,87 @@
   outline: none;
   box-shadow: 0 0 0 3px rgba(114, 46, 209, 0.2);
 }
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  align-self: flex-end;
+}
+
+.quick-button {
+  padding: 14px 20px;
+  background: #52c41a;
+  border: 1px solid #52c41a;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-button:hover:not(:disabled) {
+  background: #73d13d;
+  border-color: #73d13d;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(82, 196, 26, 0.3);
+}
+
+.quick-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(82, 196, 26, 0.3);
+}
+
+.quick-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.2);
+}
+
+.quick-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.send-button {
+  padding: 14px 20px;
+  background: #4a90e2;
+  border: 1px solid #4a90e2;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.send-button:hover:not(:disabled) {
+  background: #6aa9e8;
+  border-color: #6aa9e8;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(74, 144, 226, 0.3);
+}
+
+.send-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(74, 144, 226, 0.3);
+}
+
+.send-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2);
+}
+
+.send-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}

@@ -10,7 +10,7 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_with_history, stage2_collect_rankings_with_history, stage3_synthesize_final_with_history, calculate_aggregate_rankings
+from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_with_history, stage2_collect_rankings_with_history, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query
 
 app = FastAPI(title="LLM Council API")
 
@@ -129,6 +129,51 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         "stage2": stage2_results,
         "stage3": stage3_result,
         "metadata": metadata
+    }
+
+
+@app.post("/api/conversations/{conversation_id}/quick")
+async def send_quick_message(conversation_id: str, request: SendMessageRequest):
+    """
+    Send a message and get a quick single-model response without the 3-stage council process.
+    """
+    # Check if conversation exists
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Check if this is the first message
+    is_first_message = len(conversation["messages"]) == 0
+
+    # Add user message
+    storage.add_user_message(conversation_id, request.content)
+
+    # If this is the first message, generate a title
+    if is_first_message:
+        title = await generate_conversation_title(request.content)
+        storage.update_conversation_title(conversation_id, title)
+
+    # Get conversation history for context (only if not first message)
+    conversation_history = None
+    if not is_first_message:
+        raw_history = storage.get_conversation_history(conversation_id)
+        if raw_history:
+            conversation_history = await storage.build_conversation_context(raw_history)
+
+    # Run quick query
+    quick_result = await quick_query(request.content, conversation_history)
+
+    # Add assistant message (quick responses are stored in stage3 for consistency)
+    storage.add_assistant_message(
+        conversation_id,
+        [],  # No stage1
+        [],  # No stage2
+        quick_result  # Store in stage3
+    )
+
+    # Return the quick response
+    return {
+        "quick": quick_result
     }
 
 
