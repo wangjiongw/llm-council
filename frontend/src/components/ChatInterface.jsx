@@ -7,6 +7,35 @@ import Stage3 from './Stage3';
 import ConversationContext from './ConversationContext';
 import './ChatInterface.css';
 
+// Collapsible section component for Stage 1 and Stage 2
+const CollapsibleStage = memo(function CollapsibleStage({
+  title,
+  icon,
+  children,
+  defaultCollapsed = true
+}) {
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+
+  return (
+    <div className={`collapsible-stage ${isCollapsed ? 'collapsed' : 'expanded'}`}>
+      <button
+        className="collapsible-header"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        aria-expanded={!isCollapsed}
+      >
+        <span className="collapsible-icon">{isCollapsed ? '▶' : '▼'}</span>
+        <span className="collapsible-title">{title}</span>
+        <span className="collapsible-emoji">{icon}</span>
+      </button>
+      {!isCollapsed && (
+        <div className="collapsible-content">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+});
+
 // Memoized message item to prevent re-renders when typing
 const MessageItem = memo(function MessageItem({
   msg,
@@ -69,7 +98,11 @@ const MessageItem = memo(function MessageItem({
               </span>
             </div>
           )}
-          {msg.stage1 && <Stage1 responses={msg.stage1} />}
+          {msg.stage1 && (
+            <CollapsibleStage title="Stage 1: Individual Responses" icon="💬" defaultCollapsed={true}>
+              <Stage1 responses={msg.stage1} />
+            </CollapsibleStage>
+          )}
 
           {msg.loading?.stage2 && (
             <div className="stage-loading">
@@ -83,12 +116,14 @@ const MessageItem = memo(function MessageItem({
             </div>
           )}
           {msg.stage2 && (
-            <Stage2
-              rankings={msg.stage2}
-              labelToModel={msg.metadata?.label_to_model}
-              aggregateRankings={msg.metadata?.aggregate_rankings}
-              hasContext={hasPreviousTurns}
-            />
+            <CollapsibleStage title="Stage 2: Peer Rankings" icon="🗳️" defaultCollapsed={true}>
+              <Stage2
+                rankings={msg.stage2}
+                labelToModel={msg.metadata?.label_to_model}
+                aggregateRankings={msg.metadata?.aggregate_rankings}
+                hasContext={hasPreviousTurns}
+              />
+            </CollapsibleStage>
           )}
 
           {msg.loading?.stage3 && (
