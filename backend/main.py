@@ -34,6 +34,11 @@ class SendMessageRequest(BaseModel):
     content: str
 
 
+class UpdateTitleRequest(BaseModel):
+    """Request to update conversation title."""
+    title: str
+
+
 class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
     id: str
@@ -68,6 +73,41 @@ async def create_conversation(request: CreateConversationRequest):
     conversation_id = str(uuid.uuid4())
     conversation = storage.create_conversation(conversation_id)
     return conversation
+
+
+@app.patch("/api/conversations/{conversation_id}", response_model=Conversation)
+async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest):
+    """
+    Update the title of a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        request: Request body containing new title
+
+    Request body:
+        {
+            "title": "New Title"
+        }
+    """
+    new_title = request.title.strip()
+
+    if not new_title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+
+    if len(new_title) > 100:
+        raise HTTPException(status_code=400, detail="Title too long (max 100 characters)")
+
+    try:
+        # Update title using storage function
+        storage.update_conversation_title(conversation_id, new_title)
+
+        # Return updated conversation
+        conversation = storage.get_conversation(conversation_id)
+        return conversation
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update title: {str(e)}")
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)

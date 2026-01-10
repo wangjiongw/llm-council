@@ -284,23 +284,37 @@ Title:"""
 
     messages = [{"role": "user", "content": title_prompt}]
 
-    # Use gemini-2.5-flash for title generation (fast and cheap)
-    response = await query_model(TITLE_MODEL, messages, timeout=30.0)
+    # Try up to 2 times to generate title
+    for attempt in range(2):
+        try:
+            # Use gemini-2.5-flash for title generation (fast and cheap)
+            response = await query_model(TITLE_MODEL, messages, timeout=30.0)
 
-    if response is None:
-        # Fallback to a generic title
-        return "New Conversation"
+            if response is None:
+                if attempt == 0:
+                    continue  # Retry once
+                else:
+                    # Fallback to a generic title
+                    return "New Conversation"
 
-    title = response.get('content', 'New Conversation').strip()
+            title = response.get('content', 'New Conversation').strip()
 
-    # Clean up the title - remove quotes, limit length
-    title = title.strip('"\'')
+            # Clean up the title - remove quotes, limit length
+            title = title.strip('"\'')
 
-    # Truncate if too long
-    if len(title) > 50:
-        title = title[:47] + "..."
+            # Truncate if too long
+            if len(title) > 50:
+                title = title[:47] + "..."
 
-    return title
+            return title
+
+        except Exception as e:
+            if attempt == 0:
+                continue  # Retry once
+            else:
+                # Log error and return fallback
+                print(f"Title generation failed after retries: {e}")
+                return "New Conversation"
 
 
 async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:

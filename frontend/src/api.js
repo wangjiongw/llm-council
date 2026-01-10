@@ -49,6 +49,28 @@ export const api = {
   },
 
   /**
+   * Update conversation title.
+   * @param {string} conversationId - The conversation ID
+   * @param {string} title - The new title
+   */
+  async updateConversationTitle(conversationId, title) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error('Failed to update conversation title');
+    }
+    return response.json();
+  },
+
+  /**
    * Send a message in a conversation.
    */
   async sendMessage(conversationId, content) {

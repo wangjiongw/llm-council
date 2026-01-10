@@ -76,3 +76,89 @@
   color: #999;
   font-size: 12px;
 }
+
+/* Title editing */
+.conversation-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.title-edit-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conversation-item:hover .title-edit-btn {
+  opacity: 1;
+}
+
+.title-edit-btn:hover {
+  opacity: 1 !important;
+  transform: scale(1.1);
+}
+
+/* Inline edit form */
+.conversation-title-edit {
+  width: 100%;
+  padding: 8px 0;
+}
+
+.title-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid #4a90e2;
+  border-radius: 4px;
+  outline: none;
+  font-family: inherit;
+}
+
+.title-input:focus {
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+}
+
+.title-edit-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  justify-content: flex-end;
+}
+
+.title-save-btn,
+.title-cancel-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.title-save-btn {
+  background: #52c41a;
+  color: white;
+}
+
+.title-save-btn:hover {
+  background: #73d13d;
+}
+
+.title-cancel-btn {
+  background: #ff4d4f;
+  color: white;
+}
+
+.title-cancel-btn:hover {
+  background: #ff7875;
+}
+

@@ -41,7 +41,12 @@ function App() {
     try {
       const newConv = await api.createConversation();
       setConversations([
-        { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
+        {
+          id: newConv.id,
+          created_at: newConv.created_at,
+          message_count: 0,
+          title: newConv.title || 'New Conversation'
+        },
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
@@ -52,6 +57,33 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+  };
+
+  const handleUpdateTitle = async (conversationId, newTitle) => {
+    try {
+      // Update on backend
+      await api.updateConversationTitle(conversationId, newTitle);
+
+      // Update in conversations list
+      setConversations(prevConversations =>
+        prevConversations.map(conv =>
+          conv.id === conversationId
+            ? { ...conv, title: newTitle }
+            : conv
+        )
+      );
+
+      // Update current conversation if it's the active one
+      if (currentConversation?.id === conversationId) {
+        setCurrentConversation(prev => ({
+          ...prev,
+          title: newTitle
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to update title:', error);
+      alert('Failed to update title. Please try again.');
+    }
   };
 
   // Helper function to reload conversations list
@@ -311,6 +343,7 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onUpdateTitle={handleUpdateTitle}
       />
       <ChatInterface
         conversation={currentConversation}
