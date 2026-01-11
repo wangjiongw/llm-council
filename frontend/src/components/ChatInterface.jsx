@@ -185,16 +185,46 @@ export default function ChatInterface({
     }
 
     // Get completed turns (user + assistant pairs)
+    // Uses sequential matching to handle irregular message patterns
     const turns = [];
-    for (let i = 0; i < conversation.messages.length - 1; i += 2) {
-      if (conversation.messages[i].role === 'user' &&
-          i + 1 < conversation.messages.length &&
-          conversation.messages[i + 1].role === 'assistant' &&
-          conversation.messages[i + 1].stage3) {
-        turns.push({
-          user: conversation.messages[i],
-          assistant: conversation.messages[i + 1]
-        });
+    let i = 0;
+
+    while (i < conversation.messages.length) {
+      const msg = conversation.messages[i];
+
+      // If this is a user message, look for its assistant response
+      if (msg.role === 'user') {
+        // Search forward for the next assistant message with stage3
+        let j = i + 1;
+        while (j < conversation.messages.length) {
+          const nextMsg = conversation.messages[j];
+
+          if (nextMsg.role === 'assistant' && nextMsg.stage3) {
+            // Found a matching pair!
+            turns.push({
+              user: msg,
+              assistant: nextMsg
+            });
+            i = j + 1;  // Continue after this assistant message
+            break;
+          } else if (nextMsg.role === 'user') {
+            // Found another user message before a response
+            // Skip the unmatched user message and continue from here
+            i = j;
+            break;
+          } else {
+            // Assistant message without stage3, keep looking
+            j++;
+          }
+        }
+
+        if (j >= conversation.messages.length) {
+          // Reached end without finding assistant response
+          break;
+        }
+      } else {
+        // Skip non-user messages (shouldn't happen, but safety check)
+        i++;
       }
     }
 
