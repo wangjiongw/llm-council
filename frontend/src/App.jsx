@@ -86,6 +86,68 @@ function App() {
     }
   };
 
+  const handleDeleteConversation = async (conversationId) => {
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      'Are you sure you want to delete this conversation? This action cannot be undone.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      // Delete on backend
+      await api.deleteConversation(conversationId);
+
+      // Remove from conversations list
+      setConversations(prevConversations =>
+        prevConversations.filter(conv => conv.id !== conversationId)
+      );
+
+      // If deleting active conversation, handle navigation
+      if (currentConversationId === conversationId) {
+        const remainingConversations = conversations.filter(
+          conv => conv.id !== conversationId
+        );
+
+        if (remainingConversations.length > 0) {
+          // Navigate to most recent conversation
+          setCurrentConversationId(remainingConversations[0].id);
+        } else {
+          // No conversations left, create new one
+          const newConv = await api.createConversation();
+          setConversations([
+            {
+              id: newConv.id,
+              created_at: newConv.created_at,
+              message_count: 0,
+              title: newConv.title || 'New Conversation'
+            }
+          ]);
+          setCurrentConversationId(newConv.id);
+        }
+      }
+
+      // Clear current conversation state if it was deleted
+      if (currentConversation?.id === conversationId) {
+        setCurrentConversation(null);
+      }
+
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+
+      // Show user-friendly error message
+      if (error.message === 'Conversation not found') {
+        alert('Conversation not found. It may have already been deleted.');
+        // Refresh conversation list to sync state
+        loadConversations();
+      } else {
+        alert('Failed to delete conversation. Please try again.');
+      }
+    }
+  };
+
   // Helper function to reload conversations list
   const loadConversations = async () => {
     try {
@@ -344,6 +406,7 @@ function App() {
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
         onUpdateTitle={handleUpdateTitle}
+        onDeleteConversation={handleDeleteConversation}
       />
       <ChatInterface
         conversation={currentConversation}

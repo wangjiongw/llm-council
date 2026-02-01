@@ -7,6 +7,7 @@ export default function Sidebar({
   onSelectConversation,
   onNewConversation,
   onUpdateTitle,
+  onDeleteConversation,
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -34,6 +35,10 @@ export default function Sidebar({
     } else if (e.key === 'Escape') {
       handleCancelEdit();
     }
+  };
+
+  const handleDeleteConversation = (conversationId) => {
+    onDeleteConversation(conversationId);
   };
 
   return (
@@ -87,22 +92,34 @@ export default function Sidebar({
                   </div>
                 </div>
               ) : (
-                // Display mode with edit button
+                // Display mode with action buttons
                 <>
                   <div className="conversation-title-row">
                     <div className="conversation-title">
                       {conv.title || 'New Conversation'}
                     </div>
-                    <button
-                      className="title-edit-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleStartEdit(conv);
-                      }}
-                      title="Edit title"
-                    >
-                      ✏️
-                    </button>
+                    <div className="conversation-actions">
+                      <button
+                        className="title-edit-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEdit(conv);
+                        }}
+                        title="Edit title"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        className="conversation-delete-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteConversation(conv.id);
+                        }}
+                        title="Delete conversation"
+                      >
+                        🗑️
+                      </button>
+                    </div>
                   </div>
                   <div className="conversation-meta">
                     {conv.message_count} messages

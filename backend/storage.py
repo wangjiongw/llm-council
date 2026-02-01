@@ -366,3 +366,29 @@ Please keep the summary under 300 words."""
     except Exception as fallback_error:
         print(f"Even fallback summary failed: {fallback_error}")
         return "Previous conversation summary unavailable"
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation from storage.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if deleted successfully
+
+    Raises:
+        ValueError: If conversation doesn't exist
+        OSError: If file deletion fails
+    """
+    path = get_conversation_path(conversation_id)
+
+    if not os.path.exists(path):
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    try:
+        os.remove(path)
+        return True
+    except OSError as e:
+        raise OSError(f"Failed to delete conversation {conversation_id}: {str(e)}")

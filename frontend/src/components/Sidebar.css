@@ -107,6 +107,36 @@
   transform: scale(1.1);
 }
 
+/* Conversation action buttons */
+.conversation-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.conversation-delete-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conversation-item:hover .conversation-delete-btn {
+  opacity: 1;
+}
+
+.conversation-delete-btn:hover {
+  opacity: 1 !important;
+  transform: scale(1.1);
+  color: #ff4d4f;
+}
+
 /* Inline edit form */
 .conversation-title-edit {
   width: 100%;

@@ -71,6 +71,31 @@ export const api = {
   },
 
   /**
+   * Delete a conversation.
+   * @param {string} conversationId - The conversation ID
+   */
+  async deleteConversation(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Conversation not found');
+      }
+      throw new Error('Failed to delete conversation');
+    }
+
+    return true;
+  },
+
+  /**
    * Send a message in a conversation.
    */
   async sendMessage(conversationId, content) {
