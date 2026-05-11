@@ -1,0 +1,222 @@
+/* File Queue Styles */
+
+.file-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--input-action-height, 44px);
+  padding: 0;
+}
+
+.file-queue-empty {
+  box-sizing: border-box;
+  min-height: var(--input-action-height, 44px);
+  border: 1px dashed #d7dce2;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: #f7f9fb;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.file-queue-empty:hover {
+  background: #f2f7ff;
+  border-color: #9ec5fe;
+}
+
+.file-queue.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.file-queue-hint {
+  color: #7a8794;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* File Bubbles */
+.file-bubbles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.file-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(360px, 100%);
+  min-height: 36px;
+  padding: 4px 8px;
+  background: #f4f8ff;
+  border: 1px solid #c7dcf8;
+  border-radius: 8px;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  cursor: default;
+}
+
+.file-bubble:hover:not(.disabled) {
+  background: #eef6ff;
+  border-color: #8bbcf0;
+  box-shadow: 0 1px 4px rgba(74, 144, 226, 0.12);
+}
+
+.file-bubble.disabled {
+  opacity: 0.6;
+}
+
+/* File Bubble Image */
+.file-bubble-image {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+/* File Bubble Icon */
+.file-bubble-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #ffffff;
+  border: 1px solid #dce8f7;
+  font-size: 15px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* File Bubble Info */
+.file-bubble-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 260px;
+}
+
+.file-bubble-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #263442;
+}
+
+.file-bubble-size {
+  font-size: 10px;
+  color: #6b7785;
+}
+
+/* File Bubble Delete Button */
+.file-bubble-delete {
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #6b7785;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.file-bubble-delete:hover {
+  background: #fff0f0;
+  border-color: #ffd4d4;
+  color: #d93025;
+}
+
+/* Upload Button */
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  height: var(--input-action-height, 44px);
+  min-height: var(--input-action-height, 44px);
+  padding: 0 14px;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
+  font-size: 13px;
+  font-weight: 600;
+  color: #3f4b57;
+  white-space: nowrap;
+}
+
+.upload-button:hover:not(:disabled) {
+  background: #f2f7ff;
+  border-color: #8bbcf0;
+  color: #2f6fb0;
+}
+
+.upload-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Message Files Metadata Display */
+.message-files-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.file-metadata {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  padding: 5px 8px;
+  background: #ffffff;
+  border: 1px solid #dce8f7;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.file-metadata .file-icon {
+  font-size: 16px;
+}
+
+.file-metadata .file-name {
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-metadata .file-size {
+  color: #666;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .file-bubble,
+  .file-metadata {
+    max-width: 100%;
+  }
+
+  .file-bubbles {
+    width: 100%;
+  }
+}

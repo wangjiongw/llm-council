@@ -5,7 +5,11 @@ import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import ConversationContext from './ConversationContext';
+import FileQueue from './FileQueue';
+import UploadButton from './UploadButton';
+import { formatFileSize } from '../utils/fileUtils';
 import './ChatInterface.css';
+import './FileQueue.css';
 
 // Collapsible section component for Stage 1 and Stage 2
 const CollapsibleStage = memo(function CollapsibleStage({
@@ -68,6 +72,19 @@ const MessageItem = memo(function MessageItem({
             {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
           </div>
           <div className="message-content">
+            {msg.files && msg.files.length > 0 && (
+              <div className="message-files-metadata">
+                {msg.files.map((file, idx) => (
+                  <div key={idx} className="file-metadata">
+                    <span className="file-icon">
+                      {file.category === 'image' ? '📸' : '📄'}
+                    </span>
+                    <span className="file-name" title={file.name}>{file.name}</span>
+                    <span className="file-size">{formatFileSize(file.size)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="markdown-content">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
             </div>
@@ -166,9 +183,14 @@ export default function ChatInterface({
   onRetryQuery,
   isLoading,
   activeStreamId,
+  attachedFiles,
+  onFilesChange,
+  onFileUpload,
+  onDeleteFile,
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -252,21 +274,85 @@ export default function ChatInterface({
 
   const hasPreviousTurns = conversationContext && conversationContext.turnCount > 0;
 
+  const adjustInputHeight = useCallback(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+
+    const maxHeight = 300;
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => {
+    adjustInputHeight();
+  }, [input, adjustInputHeight]);
+
+  // File handling functions
+  const handleFileUploadLocal = useCallback(async (newFiles) => {
+    await onFileUpload(newFiles);
+  }, [onFileUpload]);
+
+  const handleFileDeleteLocal = useCallback((fileId) => {
+    onDeleteFile(fileId);
+  }, [onDeleteFile]);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    if (!isLoading) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, [isLoading]);
+
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault();
+    if (!isLoading) {
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) {
+        await handleFileUploadLocal(files);
+      }
+    }
+  }, [isLoading, handleFileUploadLocal]);
+
+  const handlePaste = useCallback(async (e) => {
+    if (!isLoading) {
+      const items = e.clipboardData.items;
+      const imageFiles = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            imageFiles.push(file);
+          }
+        }
+      }
+
+      if (imageFiles.length > 0) {
+        await handleFileUploadLocal(imageFiles);
+      }
+    }
+  }, [isLoading, handleFileUploadLocal]);
+
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input);
+    if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
+      onSendMessage(input, attachedFiles);
       setInput('');
+      // Note: Not clearing attachedFiles - they persist for next message
     }
-  }, [input, isLoading, onSendMessage]);
+  }, [input, attachedFiles, isLoading, onSendMessage]);
 
   const handleQuickSubmit = useCallback((e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading && onSendQuickMessage) {
-      onSendQuickMessage(input);
+    if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
+      onSendQuickMessage(input, attachedFiles);
       setInput('');
+      // Note: Not clearing attachedFiles - they persist for next message
     }
-  }, [input, isLoading, onSendQuickMessage]);
+  }, [input, attachedFiles, isLoading, onSendQuickMessage]);
 
   const handleKeyDown = useCallback((e) => {
     // Submit on Enter (without Shift)
@@ -354,21 +440,35 @@ export default function ChatInterface({
 
         <form className="input-form" onSubmit={handleSubmit}>
           <div className="input-wrapper">
-            <textarea
-              className="message-input"
-              placeholder={
-                isLoading
-                  ? "Query in progress... (Use stop button to interrupt)"
-                  : hasPreviousTurns
-                    ? "Continue the conversation... (Shift+Enter for new line, Enter to send)"
-                    : "Ask your question... (Shift+Enter for new line, Enter to send)"
-              }
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isLoading}
-              rows={3}
-            />
+            <div className="input-main">
+              <textarea
+                ref={inputRef}
+                className="message-input"
+                placeholder={
+                  isLoading
+                    ? "Query in progress... (Use stop button to interrupt)"
+                    : hasPreviousTurns
+                      ? "Continue the conversation... (Shift+Enter for new line, Enter to send)"
+                      : "Ask your question... (Shift+Enter for new line, Enter to send)"
+                }
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                disabled={isLoading}
+                rows={3}
+              />
+
+              <FileQueue
+                files={attachedFiles}
+                onFilesChange={onFilesChange}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                disabled={isLoading}
+                onDeleteFile={handleFileDeleteLocal}
+              />
+            </div>
+
             {isLoading && activeStreamId ? (
               <button
                 type="button"
@@ -381,11 +481,18 @@ export default function ChatInterface({
               </button>
             ) : (
               <div className="button-group">
+                {/* Upload Button */}
+                <UploadButton
+                  onUpload={handleFileUploadLocal}
+                  disabled={isLoading}
+                />
+
+                {/* Action Buttons */}
                 <button
                   type="button"
                   className="quick-button"
                   onClick={handleQuickSubmit}
-                  disabled={!input.trim() || isLoading}
+                  disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
                   title="Quick single-model response"
                   aria-label="Quick query"
                 >
@@ -394,7 +501,7 @@ export default function ChatInterface({
                 <button
                   type="submit"
                   className="send-button"
-                  disabled={!input.trim() || isLoading}
+                  disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
                   title="Full 3-stage council response"
                   aria-label="Send to council"
                 >

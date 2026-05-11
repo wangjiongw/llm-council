@@ -136,6 +136,84 @@ export const api = {
   },
 
   /**
+   * Send a message with file attachments (images/PDFs).
+   * @param {string} conversationId - The conversation ID
+   * @param {string} content - The text message content
+   * @param {Array} files - Array of File objects to upload
+   * @returns {Promise<Object>} Response with stage1_results, stage2_results, stage3_result, metadata, file_metadata
+   */
+  async sendMessageWithFiles(conversationId, content, files) {
+    const formData = new FormData();
+    formData.append('content', content);
+
+    files.forEach(file => {
+      formData.append('files', file.rawFile || file);
+    });
+
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/message/files`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('File upload failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText,
+      });
+      throw new Error(`Failed to send message with files: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Get the file queue for a conversation.
+   * @param {string} conversationId - The conversation ID
+   * @returns {Promise<Object>} Object with files array
+   */
+  async getFileQueue(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/file_queue`
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to get file queue');
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Update the file queue for a conversation.
+   * @param {string} conversationId - The conversation ID
+   * @param {Array} files - Array of file metadata objects
+   * @returns {Promise<Object>} Success response
+   */
+  async updateFileQueue(conversationId, files) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/file_queue`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ files }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to update file queue');
+    }
+
+    return response.json();
+  },
+
+  /**
    * Send a message and receive streaming updates.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content

@@ -10,6 +10,7 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeStreamId, setActiveStreamId] = useState(null);
+  const [attachedFiles, setAttachedFiles] = useState([]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -50,13 +51,23 @@ function App() {
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
+      setAttachedFiles([]); // Clear file queue for new conversation
     } catch (error) {
       console.error('Failed to create conversation:', error);
     }
   };
 
-  const handleSelectConversation = (id) => {
+  const handleSelectConversation = async (id) => {
     setCurrentConversationId(id);
+
+    // Load file queue for this conversation
+    try {
+      const fileQueueData = await api.getFileQueue(id);
+      setAttachedFiles(fileQueueData.files || []);
+    } catch (error) {
+      console.error('Failed to load file queue:', error);
+      setAttachedFiles([]);
+    }
   };
 
   const handleUpdateTitle = async (conversationId, newTitle) => {
@@ -158,6 +169,32 @@ function App() {
     }
   };
 
+  // File upload handler
+  const handleFileUpload = async (newFiles) => {
+    const { processUploadedFiles } = await import('./utils/fileUtils');
+    try {
+      const processedFiles = await processUploadedFiles(newFiles, attachedFiles);
+      setAttachedFiles(prev => [...prev, ...processedFiles]);
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  // File delete handler with backend sync
+  const handleDeleteFile = async (fileId) => {
+    const updatedFiles = attachedFiles.filter(f => f.id !== fileId);
+    setAttachedFiles(updatedFiles);
+
+    // Sync to backend if we have a current conversation
+    if (currentConversationId) {
+      try {
+        await api.updateFileQueue(currentConversationId, updatedFiles);
+      } catch (error) {
+        console.error('Failed to update file queue on backend:', error);
+      }
+    }
+  };
+
   const handleStopQuery = () => {
     api.cancelStream();
     setIsLoading(false);
@@ -214,43 +251,86 @@ function App() {
     handleSendMessage(lastUserMessage.content);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSendMessage = async (content, files = attachedFiles) => {
     if (!currentConversationId) return;
 
+    const hasFiles = files.length > 0;
     setIsLoading(true);
     const streamId = Date.now().toString(); // Unique ID for this stream
     setActiveStreamId(streamId);
 
     try {
-      // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
+      // Extract file metadata for UI display
+      const fileMetadata = files.map(f => ({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        size: f.size,
+        category: f.category
+      }));
+
+      // Optimistically add user message to UI (with file metadata)
+      const userMessage = {
+        role: 'user',
+        content,
+        ...(fileMetadata.length > 0 && { files: fileMetadata })
+      };
       setCurrentConversation((prev) => ({
         ...prev,
         messages: [...prev.messages, userMessage],
       }));
 
-      // Create a partial assistant message that will be updated progressively
-      const assistantMessage = {
-        role: 'assistant',
-        stage1: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        loading: {
-          stage1: false,
-          stage2: false,
-          stage3: false,
-        },
-      };
+      // Send message with streaming (or file upload if files present)
+      if (hasFiles) {
+        // Use file upload endpoint (non-streaming)
+        const response = await api.sendMessageWithFiles(currentConversationId, content, files);
 
-      // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMessage],
-      }));
+        // Add assistant response
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              role: 'assistant',
+              stage1: response.stage1_results,
+              stage2: response.stage2_results,
+              stage3: response.stage3_result,
+              metadata: response.metadata,
+            },
+          ],
+        }));
 
-      // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
+        // Files are one-shot browser File objects. Sent file metadata stays on
+        // the message; the pending queue is cleared after success.
+        setAttachedFiles(response.file_queue || []);
+
+        // Reload conversations list
+        loadConversations();
+        setIsLoading(false);
+        setActiveStreamId(null);
+      } else {
+        // Create a partial assistant message that will be updated progressively
+        const assistantMessage = {
+          role: 'assistant',
+          stage1: null,
+          stage2: null,
+          stage3: null,
+          metadata: null,
+          loading: {
+            stage1: false,
+            stage2: false,
+            stage3: false,
+          },
+        };
+
+        // Add the partial assistant message
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [...prev.messages, assistantMessage],
+        }));
+
+        // Use streaming endpoint for text-only messages
+        await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
         switch (eventType) {
           case 'stage1_start':
             setCurrentConversation((prev) => {
@@ -332,6 +412,7 @@ function App() {
             console.log('Unknown event type:', eventType);
         }
       });
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
 
@@ -344,44 +425,81 @@ function App() {
       // Remove optimistic messages on error
       setCurrentConversation((prev) => ({
         ...prev,
-        messages: prev.messages.slice(0, -2),
+        messages: prev.messages.slice(0, hasFiles ? -1 : -2),
       }));
       setIsLoading(false);
       setActiveStreamId(null);
     }
   };
 
-  const handleSendQuickMessage = async (content) => {
+  const handleSendQuickMessage = async (content, files = attachedFiles) => {
     if (!currentConversationId) return;
 
     setIsLoading(true);
     setActiveStreamId(null); // No streaming for quick messages
 
     try {
+      // Extract file metadata for UI display
+      const fileMetadata = files.map(f => ({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        size: f.size,
+        category: f.category
+      }));
+
       // Optimistically add user message to UI
-      const userMessage = { role: 'user', content };
+      const userMessage = {
+        role: 'user',
+        content,
+        ...(fileMetadata.length > 0 && { files: fileMetadata })
+      };
       setCurrentConversation((prev) => ({
         ...prev,
         messages: [...prev.messages, userMessage],
       }));
 
-      // Send quick message
-      const response = await api.sendQuickMessage(currentConversationId, content);
+      if (files.length > 0) {
+        // Files present, use file upload endpoint (runs full council)
+        const response = await api.sendMessageWithFiles(currentConversationId, content, files);
 
-      // Add assistant response
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          {
-            role: 'assistant',
-            stage1: null,
-            stage2: null,
-            stage3: response.quick,
-            metadata: null,
-          },
-        ],
-      }));
+        // Add assistant response (full council format)
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              role: 'assistant',
+              stage1: response.stage1_results,
+              stage2: response.stage2_results,
+              stage3: response.stage3_result,
+              metadata: response.metadata,
+            },
+          ],
+        }));
+
+        // Files are one-shot browser File objects. Sent file metadata stays on
+        // the message; the pending queue is cleared after success.
+        setAttachedFiles(response.file_queue || []);
+      } else {
+        // No files, use quick endpoint
+        const response = await api.sendQuickMessage(currentConversationId, content);
+
+        // Add assistant response (quick format)
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              role: 'assistant',
+              stage1: null,
+              stage2: null,
+              stage3: response.quick,
+              metadata: null,
+            },
+          ],
+        }));
+      }
 
       // Reload conversations list
       loadConversations();
@@ -416,6 +534,10 @@ function App() {
         onRetryQuery={handleRetryLastQuery}
         isLoading={isLoading}
         activeStreamId={activeStreamId}
+        attachedFiles={attachedFiles}
+        onFilesChange={setAttachedFiles}
+        onFileUpload={handleFileUpload}
+        onDeleteFile={handleDeleteFile}
       />
     </div>
   );

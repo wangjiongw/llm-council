@@ -3,7 +3,7 @@
 import json
 import os
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 from .config import DATA_DIR
 
@@ -107,23 +107,33 @@ def list_conversations() -> List[Dict[str, Any]]:
     return conversations
 
 
-def add_user_message(conversation_id: str, content: str):
+def add_user_message(
+    conversation_id: str,
+    content: Union[str, List[Dict[str, Any]]],
+    files: Optional[List[Dict[str, Any]]] = None
+):
     """
     Add a user message to a conversation.
 
     Args:
         conversation_id: Conversation identifier
-        content: User message content
+        content: User message content (text or multimodal array)
+        files: Optional list of file metadata for UI display
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
+    message = {
         "role": "user",
         "content": content
-    })
+    }
 
+    # Add file metadata if provided (for UI display, not sent to LLM)
+    if files:
+        message["files"] = files
+
+    conversation["messages"].append(message)
     save_conversation(conversation)
 
 
@@ -392,3 +402,38 @@ def delete_conversation(conversation_id: str) -> bool:
         return True
     except OSError as e:
         raise OSError(f"Failed to delete conversation {conversation_id}: {str(e)}")
+
+# File Queue Management
+
+def update_file_queue(conversation_id: str, file_queue: List[Dict[str, Any]]) -> None:
+    """
+    Update the file queue for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        file_queue: List of file metadata dicts
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["file_queue"] = file_queue
+    save_conversation(conversation)
+
+
+def get_file_queue(conversation_id: str) -> List[Dict[str, Any]]:
+    """
+    Get the file queue for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        List of file metadata dicts, or empty list if none exists
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    return conversation.get("file_queue", [])
+

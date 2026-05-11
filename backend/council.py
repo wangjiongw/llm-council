@@ -1,6 +1,6 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Union
 from .openrouter import query_models_parallel, query_model
 from .config import TITLE_MODEL, COUNCIL_MODELS, CHAIRMAN_MODEL
 
@@ -360,14 +360,14 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
 
 
 async def stage1_collect_responses_with_history(
-    user_query: str,
+    user_query: Union[str, List[Dict[str, Any]]],
     conversation_history: List[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
     Stage 1 with optional conversation history context.
 
     Args:
-        user_query: The user's question
+        user_query: The user's question (text string or multimodal content array)
         conversation_history: List of previous conversation messages
 
     Returns:
@@ -381,13 +381,31 @@ async def stage1_collect_responses_with_history(
         context_text = "Previous conversation context:\n\n"
         for msg in conversation_history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            context_text += f"{role}: {msg['content']}\n\n"
+            # Extract text from content if it's an array
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                # For multimodal content, extract text parts
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            context_text += f"{role}: {content_text}\n\n"
 
-        context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
-        messages.append({"role": "user", "content": context_text})
+        # Handle user_query based on type
+        if isinstance(user_query, str):
+            context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
+            messages.append({"role": "user", "content": context_text})
+        else:
+            # Multimodal content array
+            # Prepend context as first text item
+            context_item = {"type": "text", "text": f"{context_text}\n\n"}
+            messages.append({"role": "user", "content": [context_item, *user_query]})
     else:
-        # No conversation history, use original format
-        messages = [{"role": "user", "content": user_query}]
+        # No conversation history
+        if isinstance(user_query, str):
+            messages = [{"role": "user", "content": user_query}]
+        else:
+            messages = [{"role": "user", "content": user_query}]
 
     # Query all models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
@@ -408,7 +426,7 @@ async def stage1_collect_responses_with_history(
 
 
 async def stage2_collect_rankings_with_history(
-    user_query: str,
+    user_query: Union[str, List[Dict[str, Any]]],
     stage1_results: List[Dict[str, Any]],
     conversation_history: List[Dict[str, Any]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
@@ -416,7 +434,7 @@ async def stage2_collect_rankings_with_history(
     Stage 2 with optional conversation history context.
 
     Args:
-        user_query: The original user query
+        user_query: The original user query (text or multimodal content array)
         stage1_results: Results from Stage 1
         conversation_history: List of previous conversation messages
 
@@ -427,6 +445,14 @@ async def stage2_collect_rankings_with_history(
     labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
     label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, stage1_results)}
 
+    # Extract text from user_query if it's multimodal
+    if isinstance(user_query, str):
+        query_text = user_query
+    else:
+        # Extract text parts from multimodal content
+        text_parts = [q.get('text', '') for q in user_query if q.get('type') == 'text']
+        query_text = ' '.join(text_parts)
+
     # Build the ranking prompt with conversation context
     prompt_parts = []
 
@@ -434,11 +460,18 @@ async def stage2_collect_rankings_with_history(
         prompt_parts.append("Previous conversation context:")
         for msg in conversation_history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            prompt_parts.append(f"{role}: {msg['content']}")
+            # Extract text from multimodal content
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            prompt_parts.append(f"{role}: {content_text}")
         prompt_parts.append("")
 
     prompt_parts.extend([
-        f"Current question: {user_query}",
+        f"Current question: {query_text}",
         "",
         "Here are the anonymized responses from the council members:",
         ""
@@ -495,7 +528,7 @@ async def stage2_collect_rankings_with_history(
 
 
 async def stage3_synthesize_final_with_history(
-    user_query: str,
+    user_query: Union[str, List[Dict[str, Any]]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     conversation_history: List[Dict[str, Any]] = None
@@ -504,7 +537,7 @@ async def stage3_synthesize_final_with_history(
     Stage 3 with conversation history context.
 
     Args:
-        user_query: The user's question
+        user_query: The user's question (text or multimodal content array)
         stage1_results: Results from Stage 1
         stage2_results: Results from Stage 2
         conversation_history: List of previous conversation messages
@@ -512,6 +545,16 @@ async def stage3_synthesize_final_with_history(
     Returns:
         Dict with 'model' and 'response' keys
     """
+    # Extract text from user_query if it's multimodal
+    if isinstance(user_query, str):
+        query_text = user_query
+        has_files = False
+    else:
+        # Extract text parts from multimodal content
+        text_parts = [q.get('text', '') for q in user_query if q.get('type') == 'text']
+        query_text = ' '.join(text_parts)
+        has_files = any(q.get('type') == 'image_url' for q in user_query)
+
     # Build synthesis prompt with conversation context
     prompt_parts = []
 
@@ -519,13 +562,28 @@ async def stage3_synthesize_final_with_history(
         prompt_parts.append("Conversation History:")
         for msg in conversation_history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            prompt_parts.append(f"{role}: {msg['content']}")
+            # Extract text from multimodal content
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            prompt_parts.append(f"{role}: {content_text}")
         prompt_parts.append("")
         prompt_parts.append("---")
 
     prompt_parts.extend([
         "Current Exchange:",
-        f"Question: {user_query}",
+        f"Question: {query_text}",
+    ])
+
+    # Note about file attachments
+    if has_files:
+        prompt_parts.append("(Note: This question includes file attachments which have been processed separately)")
+    prompt_parts.append("")
+
+    prompt_parts.extend([
         "",
         "STAGE 1 - Individual Responses:",
     ])
@@ -590,7 +648,7 @@ async def stage3_synthesize_final_with_history(
 
 
 async def run_full_council_with_history(
-    user_query: str,
+    user_query: Union[str, List[Dict[str, Any]]],
     conversation_history: List[Dict[str, Any]] = None
 ) -> Tuple[List, List, Dict, Dict]:
     """
@@ -636,14 +694,14 @@ async def run_full_council_with_history(
 
 
 async def quick_query(
-    user_query: str,
+    user_query: Union[str, List[Dict[str, Any]]],
     conversation_history: List[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Quick single-model query without the 3-stage council process.
 
     Args:
-        user_query: The user's question
+        user_query: The user's question (text or multimodal content array)
         conversation_history: List of previous conversation messages
 
     Returns:
@@ -659,13 +717,30 @@ async def quick_query(
         context_text = "Previous conversation context:\n\n"
         for msg in conversation_history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            context_text += f"{role}: {msg['content']}\n\n"
+            # Extract text from multimodal content
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            context_text += f"{role}: {content_text}\n\n"
 
-        context_text += f"Current question: {user_query}"
-        messages.append({"role": "user", "content": context_text})
+        # Handle user_query based on type
+        if isinstance(user_query, str):
+            context_text += f"Current question: {user_query}"
+            messages.append({"role": "user", "content": context_text})
+        else:
+            # Multimodal content array
+            # Prepend context as first text item
+            context_item = {"type": "text", "text": f"{context_text}\n\n"}
+            messages.append({"role": "user", "content": [context_item, *user_query]})
     else:
-        # No conversation history, use original format
-        messages = [{"role": "user", "content": user_query}]
+        # No conversation history
+        if isinstance(user_query, str):
+            messages = [{"role": "user", "content": user_query}]
+        else:
+            messages = [{"role": "user", "content": user_query}]
 
     # Query the quick model
     response = await query_model(QUICK_MODEL, messages)

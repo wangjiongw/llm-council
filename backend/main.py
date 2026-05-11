@@ -1,6 +1,6 @@
 """FastAPI backend for LLM Council."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -17,7 +17,7 @@ app = FastAPI(title="LLM Council API")
 # Enable CORS for local development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,6 +37,11 @@ class SendMessageRequest(BaseModel):
 class UpdateTitleRequest(BaseModel):
     """Request to update conversation title."""
     title: str
+
+
+class UpdateFileQueueRequest(BaseModel):
+    """Request to replace a conversation's pending file queue."""
+    files: List[Dict[str, Any]]
 
 
 class ConversationMetadata(BaseModel):
@@ -320,6 +325,163 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+# File Upload Endpoints
+
+@app.post("/api/conversations/{conversation_id}/message/files")
+async def send_message_with_files(
+    conversation_id: str,
+    content: str = Form(...),
+    files: List[UploadFile] = File(default=[])
+):
+    """
+    Send message with file attachments (images/PDFs).
+
+    Args:
+        conversation_id: Conversation identifier
+        content: Text message content
+        files: List of uploaded files
+
+    Returns:
+        Council results with stage1, stage2, stage3 responses
+    """
+    try:
+        conversation = storage.get_conversation(conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        is_first_message = len(conversation["messages"]) == 0
+
+        # Import file processor
+        from .file_processor import process_uploaded_files
+
+        # 1. Read and process files
+        uploaded_files = []
+        for file in files:
+            content_bytes = await file.read()
+            uploaded_files.append({
+                'filename': file.filename,
+                'content': content_bytes,
+                'file_type': file.content_type
+            })
+
+        # 2. Process files (base64 encoding, text extraction)
+        processed_files = await process_uploaded_files(uploaded_files)
+
+        # 2.5 Extract file metadata for UI display
+        file_metadata = []
+        for f in uploaded_files:
+            file_metadata.append({
+                'id': str(uuid.uuid4()),
+                'name': f['filename'],
+                'type': f['file_type'],
+                'size': len(f['content']),
+                'category': 'image' if f['file_type'].startswith('image/') else 'document'
+            })
+
+        # 3. Build content array
+        if processed_files:
+            # Has files: build content array
+            content_array = [
+                {"type": "text", "text": content},
+                *processed_files
+            ]
+        else:
+            # No files: text only
+            content_array = content
+
+        # 4. Run full council process
+        raw_history = storage.get_conversation_history(conversation_id)
+        conversation_history = None
+        if raw_history:
+            conversation_history = await storage.build_conversation_context(raw_history)
+
+        stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
+            content_array,
+            conversation_history=conversation_history
+        )
+
+        # 5. Save user message (with file metadata)
+        storage.add_user_message(conversation_id, content_array, files=file_metadata)
+
+        # 6. Save assistant response
+        storage.add_assistant_message(
+            conversation_id,
+            stage1_results,
+            stage2_results,
+            stage3_result
+        )
+
+        if is_first_message:
+            title = await generate_conversation_title(content)
+            storage.update_conversation_title(conversation_id, title)
+
+        # 7. Clear pending file queue after a successful send. Sent files remain
+        # attached to the user message via metadata.
+        storage.update_file_queue(conversation_id, [])
+
+        return {
+            "stage1_results": stage1_results,
+            "stage2_results": stage2_results,
+            "stage3_result": stage3_result,
+            "metadata": metadata,
+            "file_metadata": file_metadata,
+            "file_queue": []
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send message with files: {str(e)}")
+
+
+@app.get("/api/conversations/{conversation_id}/file_queue")
+async def get_file_queue(conversation_id: str):
+    """
+    Get the file queue for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        Dict with files list
+    """
+    try:
+        files = storage.get_file_queue(conversation_id)
+        return {"files": files}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get file queue: {str(e)}")
+
+
+@app.patch("/api/conversations/{conversation_id}/file_queue")
+async def update_file_queue_endpoint(
+    conversation_id: str,
+    request: UpdateFileQueueRequest
+):
+    """
+    Update the file queue for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        request.files: List of file metadata dicts
+
+    Returns:
+        Success confirmation
+
+    Used when user manually deletes files from the queue
+    """
+    try:
+        storage.update_file_queue(conversation_id, request.files)
+        return {"success": True}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update file queue: {str(e)}")
 
 
 if __name__ == "__main__":
