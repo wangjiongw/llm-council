@@ -19,3 +19,20 @@ data/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+
+# Auto Claude data directory
+.auto-claude/
+
+# Auto Claude generated files
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.worktrees/
+.security-key
+logs/security/
+
+# oh-my-claude generated files
+.omc/
+
+# oh-my-codex generated files
+.omx/
