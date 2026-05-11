@@ -202,16 +202,19 @@ function App() {
     setIsLoading(false);
     setActiveStreamId(null);
 
-    // Remove optimistic assistant message
+    // Remove the optimistic messages for the in-flight turn.
     setCurrentConversation((prev) => {
+      if (!prev?.messages) return prev;
       const messages = [...prev.messages];
+
       if (messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
-        return {
-          ...prev,
-          messages: messages.slice(0, -1)
-        };
+        messages.pop();
       }
-      return prev;
+      if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+        messages.pop();
+      }
+
+      return { ...prev, messages };
     });
   };
 
@@ -438,7 +441,8 @@ function App() {
     if (!currentConversationId) return;
 
     setIsLoading(true);
-    setActiveStreamId(null); // No streaming for quick messages
+    const requestId = Date.now().toString();
+    setActiveStreamId(requestId);
 
     try {
       // Extract file metadata for UI display
@@ -508,6 +512,10 @@ function App() {
     } catch (error) {
       console.error('Failed to send quick message:', error);
 
+      if (error.message === 'Query stopped by user') {
+        return;
+      }
+
       // Remove optimistic messages on error
       setCurrentConversation((prev) => ({
         ...prev,
@@ -515,6 +523,7 @@ function App() {
       }));
     } finally {
       setIsLoading(false);
+      setActiveStreamId(null);
     }
   };
 

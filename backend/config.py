@@ -10,16 +10,17 @@ OPENROUTER_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Council members - list of OpenRouter model identifiers
 COUNCIL_MODELS = [
-    "anthropic/claude-sonnet-4.5",
-    "gpt-5.2-chat-latest",
-    "gemini-3-pro-preview",
+    "claude-opus-4-7",
+    "gpt-5.5-xhigh",
+    "gemini-3.1-pro-preview",
+    "deepseek-v4-pro"
 ]
 
-TITLE_MODEL = "gemini-2.5-flash"
+TITLE_MODEL = "gpt-5-nano"
 # Chairman model - synthesizes final response
-CHAIRMAN_MODEL = "gemini-3-pro-preview"
+CHAIRMAN_MODEL = "gemini-3.1-pro-preview"
 # Quick query model - for direct single-model responses
-QUICK_MODEL = "gemini-2.5-flash"
+QUICK_MODEL = "gpt-5.4-nano"
 
 # OpenRouter API endpoint
 OPENROUTER_BASE_URL = os.getenv("OPENAI_API_BASE_URL")
@@ -32,5 +33,5 @@ DATA_DIR = "data/conversations"
 # Conversation history settings
 CONVERSATION_HISTORY_LIMIT = 10  # Number of recent turns to include in full context
 CONVERSATION_SUMMARY_THRESHOLD = 20  # When to start summarizing older messages
-SUMMARIZATION_MODEL = "gemini-2.5-flash"  # Fast model for summarization
-SUMMARIZATION_FALLBACK_MODELS = ["openai/gpt-4o-mini", "anthropic/claude-haiku"]  # Backup models
+SUMMARIZATION_MODEL = "gpt-5.4-nano"  # Fast model for summarization
+SUMMARIZATION_FALLBACK_MODELS = ["deepseek-v4-flash", "gpt-5-nano"]  # Backup models

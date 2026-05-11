@@ -48,6 +48,7 @@ const MessageItem = memo(function MessageItem({
   conversationContext,
   isLoading,
   onRetryQuery,
+  onEditMessage,
   isLastMessage,
 }) {
   const isUserMessage = msg.role === 'user';
@@ -89,6 +90,19 @@ const MessageItem = memo(function MessageItem({
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
             </div>
           </div>
+          {!isLoading && (
+            <div className="message-actions">
+              <button
+                type="button"
+                className="edit-message-button"
+                onClick={() => onEditMessage(msg)}
+                title="Edit this message in the input box"
+                aria-label="Edit this message"
+              >
+                ✏️ Edit
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="assistant-message">
@@ -191,6 +205,20 @@ export default function ChatInterface({
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  const messageContentToText = useCallback((content) => {
+    if (typeof content === 'string') {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      return content
+        .filter(item => item?.type === 'text')
+        .map(item => item.text || '')
+        .join('\n')
+        .trim();
+    }
+    return '';
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -354,13 +382,41 @@ export default function ChatInterface({
     }
   }, [input, attachedFiles, isLoading, onSendQuickMessage]);
 
+  const handleEditMessage = useCallback((msg) => {
+    const text = messageContentToText(msg.content);
+    setInput(text);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      adjustInputHeight();
+    });
+  }, [adjustInputHeight, messageContentToText]);
+
   const handleKeyDown = useCallback((e) => {
-    // Submit on Enter (without Shift)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleQuickSubmit(e);
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
-  }, [handleSubmit]);
+  }, [handleQuickSubmit, handleSubmit]);
+
+  useEffect(() => {
+    if (!isLoading || !onStopQuery) return undefined;
+
+    const handleGlobalKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        onStopQuery();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isLoading, onStopQuery]);
 
   if (!conversation) {
     return (
@@ -405,6 +461,7 @@ export default function ChatInterface({
                   conversationContext={conversationContext}
                   isLoading={isLoading}
                   onRetryQuery={onRetryQuery}
+                  onEditMessage={handleEditMessage}
                   isLastMessage={index === conversation.messages.length - 1}
                 />
               ))}
@@ -446,10 +503,10 @@ export default function ChatInterface({
                 className="message-input"
                 placeholder={
                   isLoading
-                    ? "Query in progress... (Use stop button to interrupt)"
+                    ? "Query in progress... (Ctrl+C to stop)"
                     : hasPreviousTurns
-                      ? "Continue the conversation... (Shift+Enter for new line, Enter to send)"
-                      : "Ask your question... (Shift+Enter for new line, Enter to send)"
+                      ? "Continue... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
+                      : "Ask... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
                 }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

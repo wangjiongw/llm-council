@@ -308,15 +308,14 @@
   padding-top: 12px;
   border-top: 1px solid #e0e0e0;
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
 }
 
-.retry-button {
+.retry-button,
+.edit-message-button {
   padding: 8px 16px;
-  background: #722ed1;
-  border: 1px solid #722ed1;
   border-radius: 6px;
-  color: #fff;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -327,6 +326,18 @@
   gap: 6px;
 }
 
+.retry-button {
+  background: #722ed1;
+  border: 1px solid #722ed1;
+  color: #fff;
+}
+
+.edit-message-button {
+  background: #fff;
+  border: 1px solid #d0d7de;
+  color: #333;
+}
+
 .retry-button:hover {
   background: #9254de;
   border-color: #9254de;
@@ -334,12 +345,21 @@
   box-shadow: 0 2px 8px rgba(114, 46, 209, 0.3);
 }
 
-.retry-button:active {
+.edit-message-button:hover {
+  background: #f0f6ff;
+  border-color: #4a90e2;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(74, 144, 226, 0.2);
+}
+
+.retry-button:active,
+.edit-message-button:active {
   transform: translateY(0);
   box-shadow: 0 1px 4px rgba(114, 46, 209, 0.3);
 }
 
-.retry-button:focus {
+.retry-button:focus,
+.edit-message-button:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(114, 46, 209, 0.2);
 }

@@ -6,6 +6,25 @@ const API_BASE = 'http://localhost:8001';
 
 let currentAbortController = null;
 
+function startAbortableRequest() {
+  const controller = new AbortController();
+  currentAbortController = controller;
+  return controller;
+}
+
+function finishAbortableRequest(controller) {
+  if (currentAbortController === controller) {
+    currentAbortController = null;
+  }
+}
+
+function normalizeAbortError(error) {
+  if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
+    throw new Error('Query stopped by user');
+  }
+  throw error;
+}
+
 export const api = {
   /**
    * List all conversations.
@@ -99,40 +118,58 @@ export const api = {
    * Send a message in a conversation.
    */
   async sendMessage(conversationId, content) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
+    const controller = startAbortableRequest();
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/message`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content }),
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to send message');
       }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to send message');
+      return response.json();
+    } catch (error) {
+      normalizeAbortError(error);
+    } finally {
+      finishAbortableRequest(controller);
     }
-    return response.json();
   },
 
   /**
    * Send a quick message (single-model, no 3-stage council).
    */
   async sendQuickMessage(conversationId, content) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/quick`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
+    const controller = startAbortableRequest();
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/quick`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content }),
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) {
+        throw new Error('Failed to send quick message');
       }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to send quick message');
+      return response.json();
+    } catch (error) {
+      normalizeAbortError(error);
+    } finally {
+      finishAbortableRequest(controller);
     }
-    return response.json();
   },
 
   /**
@@ -143,6 +180,7 @@ export const api = {
    * @returns {Promise<Object>} Response with stage1_results, stage2_results, stage3_result, metadata, file_metadata
    */
   async sendMessageWithFiles(conversationId, content, files) {
+    const controller = startAbortableRequest();
     const formData = new FormData();
     formData.append('content', content);
 
@@ -150,25 +188,32 @@ export const api = {
       formData.append('files', file.rawFile || file);
     });
 
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message/files`,
-      {
-        method: 'POST',
-        body: formData,
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/message/files`,
+        {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('File upload failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText,
+        });
+        throw new Error(`Failed to send message with files: ${response.status} ${response.statusText}`);
       }
-    );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('File upload failed:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorText,
-      });
-      throw new Error(`Failed to send message with files: ${response.status} ${response.statusText}`);
+      return response.json();
+    } catch (error) {
+      normalizeAbortError(error);
+    } finally {
+      finishAbortableRequest(controller);
     }
-
-    return response.json();
   },
 
   /**
@@ -267,7 +312,7 @@ export const api = {
    * @returns {Promise<void>}
    */
   async sendMessageStream(conversationId, content, onEvent, abortController = null) {
-    const controller = abortController || new AbortController();
+    const controller = abortController || startAbortableRequest();
     currentAbortController = controller;
 
     const response = await fetch(
