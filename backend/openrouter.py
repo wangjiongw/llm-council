@@ -1,14 +1,14 @@
-"""OpenRouter API client for making LLM requests."""
+"""OpenAI-compatible API client for making LLM requests."""
 
 import httpx
 from typing import List, Dict, Any, Optional
-from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
+from .llm_settings import resolve_model_config
 
 
 async def query_model(
     model: str,
     messages: List[Dict[str, Any]],
-    timeout: float = 120.0
+    timeout: Optional[float] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Query a single model via OpenRouter API.
@@ -22,20 +22,26 @@ async def query_model(
     Returns:
         Response dict with 'content' and optional 'reasoning_details', or None if failed
     """
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": model,
-        "messages": messages,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        model_config = resolve_model_config(model)
+        if not model_config["enabled"]:
+            print(f"Skipping disabled model {model}")
+            return None
+
+        request_timeout = timeout if timeout is not None else model_config["timeout"]
+        headers = {
+            "Authorization": f"Bearer {model_config['api_key']}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
             response = await client.post(
-                OPENROUTER_API_URL,
+                model_config["chat_url"],
                 headers=headers,
                 json=payload
             )
@@ -93,3 +99,24 @@ async def query_models_parallel(
 
     # Map models to their responses
     return {model: response for model, response in zip(models, responses)}
+
+
+async def query_model_with_fallbacks(
+    models: List[str],
+    messages: List[Dict[str, Any]],
+    timeout: Optional[float] = None
+) -> Dict[str, Any]:
+    """Try models in order and return the first successful response with attempts."""
+    attempts = []
+    for model in [model for model in models if model]:
+        response = await query_model(model, messages, timeout=timeout)
+        attempts.append({"model": model, "ok": bool(response and response.get("content"))})
+        if response and response.get("content"):
+            response["attempts"] = attempts
+            return response
+
+    return {
+        "content": None,
+        "response": None,
+        "attempts": attempts,
+    }

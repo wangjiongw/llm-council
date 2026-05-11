@@ -1,0 +1,314 @@
+import { useEffect, useMemo, useState } from 'react';
+import './LLMSettingsModal.css';
+
+const emptySettings = {
+  default_provider: { base_url: '', api_key: '' },
+  council_models: [],
+  chairman_model: '',
+  quick_model: '',
+  quick_fallback_models: [],
+  title_model: '',
+  title_fallback_models: [],
+  summarization_model: '',
+  summarization_fallback_models: [],
+  model_overrides: {},
+};
+
+const splitLines = (value) =>
+  value
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean);
+
+const joinLines = (value) => (Array.isArray(value) ? value.join('\n') : '');
+
+export default function LLMSettingsModal({ open, onClose, api }) {
+  const [settings, setSettings] = useState(emptySettings);
+  const [defaultApiKey, setDefaultApiKey] = useState('');
+  const [overrideModel, setOverrideModel] = useState('');
+  const [overrideBaseUrl, setOverrideBaseUrl] = useState('');
+  const [overrideApiKey, setOverrideApiKey] = useState('');
+  const [status, setStatus] = useState('');
+  const [testModel, setTestModel] = useState('');
+  const [testResult, setTestResult] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+
+    (async () => {
+      setStatus('Loading settings...');
+      setTestResult(null);
+      try {
+        const data = await api.getLLMSettings();
+        setSettings({ ...emptySettings, ...data });
+        setDefaultApiKey('');
+        setStatus('');
+      } catch (error) {
+        setStatus(error.message);
+      }
+    })();
+  }, [api, open]);
+
+  const knownModels = useMemo(() => {
+    const models = [
+      ...settings.council_models,
+      settings.chairman_model,
+      settings.quick_model,
+      settings.title_model,
+      settings.summarization_model,
+    ].filter(Boolean);
+    return Array.from(new Set(models));
+  }, [settings]);
+
+  if (!open) return null;
+
+  const updateField = (field, value) => {
+    setSettings(prev => ({ ...prev, [field]: value }));
+  };
+
+  const updateDefaultProvider = (field, value) => {
+    setSettings(prev => ({
+      ...prev,
+      default_provider: {
+        ...prev.default_provider,
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleAddOverride = () => {
+    const model = overrideModel.trim();
+    if (!model) return;
+
+    setSettings(prev => ({
+      ...prev,
+      model_overrides: {
+        ...prev.model_overrides,
+        [model]: {
+          base_url: overrideBaseUrl.trim(),
+          ...(overrideApiKey.trim() ? { api_key: overrideApiKey.trim() } : {}),
+        },
+      },
+    }));
+    setOverrideModel('');
+    setOverrideBaseUrl('');
+    setOverrideApiKey('');
+  };
+
+  const handleRemoveOverride = (model) => {
+    setSettings(prev => {
+      const nextOverrides = { ...prev.model_overrides };
+      delete nextOverrides[model];
+      return { ...prev, model_overrides: nextOverrides };
+    });
+  };
+
+  const buildPayload = () => {
+    const modelOverrides = Object.fromEntries(
+      Object.entries(settings.model_overrides || {}).map(([model, override]) => [
+        model,
+        {
+          ...(override.base_url ? { base_url: override.base_url } : {}),
+          ...(override.api_key ? { api_key: override.api_key } : {}),
+          ...(override.timeout ? { timeout: override.timeout } : {}),
+          ...(override.enabled === false ? { enabled: false } : {}),
+        },
+      ])
+    );
+
+    const payload = {
+      ...settings,
+      default_provider: {
+        base_url: settings.default_provider.base_url || '',
+      },
+      model_overrides: modelOverrides,
+    };
+
+    if (defaultApiKey.trim()) {
+      payload.default_provider.api_key = defaultApiKey.trim();
+    }
+
+    return payload;
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setStatus('');
+    try {
+      const saved = await api.updateLLMSettings(buildPayload());
+      setSettings({ ...emptySettings, ...saved });
+      setDefaultApiKey('');
+      setStatus('Saved. New calls will use these settings.');
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    const model = (testModel || settings.quick_model || knownModels[0] || '').trim();
+    if (!model) {
+      setTestResult({ ok: false, error: 'Choose a model first.' });
+      return;
+    }
+
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testLLMSettings(model);
+      setTestResult(result);
+    } catch (error) {
+      setTestResult({ ok: false, error: error.message });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  return (
+    <div className="settings-modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="settings-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+        <div className="settings-modal-header">
+          <div>
+            <h2>LLM Settings</h2>
+            <p>Runtime provider routing for OpenAI-compatible servers.</p>
+          </div>
+          <button className="settings-close-btn" onClick={onClose} aria-label="Close settings">
+            ×
+          </button>
+        </div>
+
+        <div className="settings-grid">
+          <section className="settings-section">
+            <h3>Default Provider</h3>
+            <label>
+              Base URL
+              <input
+                value={settings.default_provider.base_url || ''}
+                onChange={e => updateDefaultProvider('base_url', e.target.value)}
+                placeholder="https://api.example.com/v1"
+              />
+            </label>
+            <label>
+              API Key
+              <input
+                value={defaultApiKey}
+                onChange={e => setDefaultApiKey(e.target.value)}
+                placeholder={settings.default_provider.api_key_set ? 'Configured, leave blank to keep' : 'Not configured'}
+                type="password"
+              />
+            </label>
+          </section>
+
+          <section className="settings-section">
+            <h3>Model Roles</h3>
+            <label>
+              Council Models
+              <textarea
+                rows={4}
+                value={joinLines(settings.council_models)}
+                onChange={e => updateField('council_models', splitLines(e.target.value))}
+              />
+            </label>
+            <div className="settings-two-col">
+              <label>
+                Chairman
+                <input value={settings.chairman_model} onChange={e => updateField('chairman_model', e.target.value)} />
+              </label>
+              <label>
+                Quick
+                <input value={settings.quick_model} onChange={e => updateField('quick_model', e.target.value)} />
+              </label>
+            </div>
+            <div className="settings-two-col">
+              <label>
+                Title
+                <input value={settings.title_model} onChange={e => updateField('title_model', e.target.value)} />
+              </label>
+              <label>
+                Summary
+                <input value={settings.summarization_model} onChange={e => updateField('summarization_model', e.target.value)} />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3>Fallback Models</h3>
+            <label>
+              Quick fallback
+              <textarea
+                rows={3}
+                value={joinLines(settings.quick_fallback_models)}
+                onChange={e => updateField('quick_fallback_models', splitLines(e.target.value))}
+              />
+            </label>
+            <label>
+              Summary fallback
+              <textarea
+                rows={3}
+                value={joinLines(settings.summarization_fallback_models)}
+                onChange={e => updateField('summarization_fallback_models', splitLines(e.target.value))}
+              />
+            </label>
+          </section>
+
+          <section className="settings-section">
+            <h3>Per-model Override</h3>
+            <label>
+              Model
+              <input value={overrideModel} onChange={e => setOverrideModel(e.target.value)} placeholder="vendor/model" />
+            </label>
+            <label>
+              Base URL
+              <input value={overrideBaseUrl} onChange={e => setOverrideBaseUrl(e.target.value)} placeholder="Optional override" />
+            </label>
+            <label>
+              API Key
+              <input value={overrideApiKey} onChange={e => setOverrideApiKey(e.target.value)} type="password" placeholder="Optional override" />
+            </label>
+            <button className="settings-secondary-btn" onClick={handleAddOverride}>Add Override</button>
+            <div className="override-list">
+              {Object.entries(settings.model_overrides || {}).map(([model, override]) => (
+                <div className="override-row" key={model}>
+                  <span>{model}</span>
+                  <small>{override.base_url || 'default URL'} · {override.api_key_set || override.api_key ? 'key set' : 'default key'}</small>
+                  <button onClick={() => handleRemoveOverride(model)}>Remove</button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className="settings-test-row">
+          <input
+            value={testModel}
+            onChange={e => setTestModel(e.target.value)}
+            placeholder={settings.quick_model || knownModels[0] || 'Model to test'}
+            list="known-llm-models"
+          />
+          <datalist id="known-llm-models">
+            {knownModels.map(model => <option value={model} key={model} />)}
+          </datalist>
+          <button className="settings-secondary-btn" onClick={handleTest} disabled={isTesting}>
+            {isTesting ? 'Testing...' : 'Test'}
+          </button>
+          {testResult && (
+            <span className={`settings-test-result ${testResult.ok ? 'ok' : 'fail'}`}>
+              {testResult.ok ? 'Connected' : testResult.error}
+            </span>
+          )}
+        </div>
+
+        <div className="settings-modal-footer">
+          <span className="settings-status">{status}</span>
+          <button className="settings-secondary-btn" onClick={onClose}>Close</button>
+          <button className="settings-primary-btn" onClick={handleSave} disabled={isSaving}>
+            {isSaving ? 'Saving...' : 'Save Settings'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

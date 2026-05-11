@@ -1,8 +1,13 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple, Union
-from .openrouter import query_models_parallel, query_model
-from .config import TITLE_MODEL, COUNCIL_MODELS, CHAIRMAN_MODEL
+from .openrouter import query_models_parallel, query_model, query_model_with_fallbacks
+from .llm_settings import model_list, model_name
+
+
+def get_council_models() -> List[str]:
+    """Return currently configured council models."""
+    return model_list("council_models")
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -18,7 +23,8 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
     messages = [{"role": "user", "content": user_query}]
 
     # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    council_models = get_council_models()
+    responses = await query_models_parallel(council_models, messages)
 
     # Format results with full Response API metadata
     stage1_results = []
@@ -98,7 +104,8 @@ Now provide your evaluation and ranking:"""
     messages = [{"role": "user", "content": ranking_prompt}]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    council_models = get_council_models()
+    responses = await query_models_parallel(council_models, messages)
 
     # Format results with full Response API metadata
     stage2_results = []
@@ -165,18 +172,19 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     messages = [{"role": "user", "content": chairman_prompt}]
 
     # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+    chairman_model = model_name("chairman_model")
+    response = await query_model(chairman_model, messages)
 
     if response is None:
         # Fallback if chairman fails
         return {
-            "model": CHAIRMAN_MODEL,
+            "model": chairman_model,
             "response": "Error: Unable to generate final synthesis."
         }
 
     # Return with full Response API metadata
     return {
-        "model": CHAIRMAN_MODEL,
+        "model": chairman_model,
         "response": response.get('content', ''),
         "response_id": response.get('id'),
         "usage": response.get('usage', {}),
@@ -288,9 +296,10 @@ Title:"""
     for attempt in range(2):
         try:
             # Use gemini-2.5-flash for title generation (fast and cheap)
-            response = await query_model(TITLE_MODEL, messages, timeout=30.0)
+            models_to_try = [model_name("title_model"), *model_list("title_fallback_models")]
+            response = await query_model_with_fallbacks(models_to_try, messages, timeout=30.0)
 
-            if response is None:
+            if not response or not response.get("content"):
                 if attempt == 0:
                     continue  # Retry once
                 else:
@@ -408,7 +417,8 @@ async def stage1_collect_responses_with_history(
             messages = [{"role": "user", "content": user_query}]
 
     # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    council_models = get_council_models()
+    responses = await query_models_parallel(council_models, messages)
 
     # Format results with full Response API metadata
     stage1_results = []
@@ -508,7 +518,8 @@ async def stage2_collect_rankings_with_history(
     messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
 
     # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    council_models = get_council_models()
+    responses = await query_models_parallel(council_models, messages)
 
     # Format results with full Response API metadata
     stage2_results = []
@@ -629,12 +640,13 @@ async def stage3_synthesize_final_with_history(
     messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
 
     # Query chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+    chairman_model = model_name("chairman_model")
+    response = await query_model(chairman_model, messages)
 
     # Return with full Response API metadata
     if response:
         return {
-            "model": CHAIRMAN_MODEL,
+            "model": chairman_model,
             "response": response.get('content', ''),
             "response_id": response.get('id'),
             "usage": response.get('usage', {}),
@@ -642,7 +654,7 @@ async def stage3_synthesize_final_with_history(
         }
     else:
         return {
-            "model": CHAIRMAN_MODEL,
+            "model": chairman_model,
             "response": "Error: Unable to generate final synthesis."
         }
 
@@ -707,7 +719,8 @@ async def quick_query(
     Returns:
         Dict with 'model', 'response', and Response API metadata
     """
-    from .config import QUICK_MODEL
+    quick_model = model_name("quick_model")
+    quick_models = [quick_model, *model_list("quick_fallback_models")]
 
     # Build messages with conversation context
     messages = []
@@ -743,21 +756,23 @@ async def quick_query(
             messages = [{"role": "user", "content": user_query}]
 
     # Query the quick model
-    response = await query_model(QUICK_MODEL, messages)
+    response = await query_model_with_fallbacks(quick_models, messages)
 
-    if response is None:
+    if not response or not response.get("content"):
         return {
-            "model": QUICK_MODEL,
+            "model": quick_model,
             "response": "Error: Model failed to respond. Please try again.",
             "response_id": None,
             "usage": {},
             "finish_reason": None,
+            "metadata": {"attempts": (response or {}).get("attempts", [])},
         }
 
     return {
-        "model": QUICK_MODEL,
+        "model": response.get("model") or quick_model,
         "response": response.get('content', ''),
         "response_id": response.get('id'),
         "usage": response.get('usage', {}),
         "finish_reason": response.get('finish_reason'),
+        "metadata": {"attempts": response.get("attempts", [])},
     }

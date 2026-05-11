@@ -1,0 +1,242 @@
+.settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 24, 31, 0.42);
+}
+
+.settings-modal {
+  width: min(940px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  box-shadow: 0 18px 60px rgba(20, 24, 31, 0.22);
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid #eaeef2;
+}
+
+.settings-modal-header h2,
+.settings-section h3 {
+  margin: 0;
+  color: #24292f;
+}
+
+.settings-modal-header h2 {
+  font-size: 20px;
+}
+
+.settings-modal-header p {
+  margin: 4px 0 0;
+  color: #57606a;
+  font-size: 13px;
+}
+
+.settings-close-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #57606a;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 18px 22px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #eaeef2;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.settings-section h3 {
+  font-size: 14px;
+}
+
+.settings-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #57606a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-section input,
+.settings-section textarea,
+.settings-test-row input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #24292f;
+  font: inherit;
+  font-size: 13px;
+}
+
+.settings-section textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.settings-section input:focus,
+.settings-section textarea:focus,
+.settings-test-row input:focus {
+  border-color: #4a90e2;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.18);
+}
+
+.settings-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.override-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.override-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #eaeef2;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.override-row span {
+  color: #24292f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.override-row small {
+  grid-column: 1;
+  color: #6e7781;
+  font-size: 12px;
+}
+
+.override-row button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  color: #57606a;
+  cursor: pointer;
+}
+
+.settings-test-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(120px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 0 22px 18px;
+}
+
+.settings-test-result {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-test-result.ok {
+  color: #1a7f37;
+}
+
+.settings-test-result.fail {
+  color: #cf222e;
+}
+
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 20px;
+  border-top: 1px solid #eaeef2;
+}
+
+.settings-status {
+  flex: 1;
+  color: #57606a;
+  font-size: 13px;
+}
+
+.settings-primary-btn,
+.settings-secondary-btn {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-primary-btn {
+  border: 1px solid #4a90e2;
+  background: #4a90e2;
+  color: #fff;
+}
+
+.settings-primary-btn:disabled,
+.settings-secondary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.settings-secondary-btn {
+  border: 1px solid #d0d7de;
+  background: #fff;
+  color: #24292f;
+}
+
+@media (max-width: 760px) {
+  .settings-modal-backdrop {
+    padding: 0;
+  }
+
+  .settings-modal {
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .settings-grid,
+  .settings-two-col,
+  .settings-test-row {
+    grid-template-columns: 1fr;
+  }
+}

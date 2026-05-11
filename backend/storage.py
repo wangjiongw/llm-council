@@ -34,7 +34,12 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
         "title": "New Conversation",
-        "messages": []
+        "messages": [],
+        "context_summary": {
+            "content": "",
+            "covered_messages": 0,
+            "updated_at": None,
+        },
     }
 
     # Save to file
@@ -93,6 +98,8 @@ def list_conversations() -> List[Dict[str, Any]]:
             path = os.path.join(DATA_DIR, filename)
             with open(path, 'r') as f:
                 data = json.load(f)
+                if "id" not in data or "messages" not in data:
+                    continue
                 # Return metadata only
                 conversations.append({
                     "id": data["id"],
@@ -238,10 +245,55 @@ def get_conversation_history(
     return history_messages
 
 
+def _content_to_text(content: Any) -> str:
+    """Extract plain text from stored string or multimodal message content."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(str(item.get("text", "")))
+        return " ".join(part for part in text_parts if part)
+    return str(content or "")
+
+
+def _get_summary_state(conversation_id: Optional[str]) -> Dict[str, Any]:
+    if not conversation_id:
+        return {"content": "", "covered_messages": 0, "updated_at": None}
+
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        return {"content": "", "covered_messages": 0, "updated_at": None}
+
+    return conversation.get("context_summary") or {
+        "content": "",
+        "covered_messages": 0,
+        "updated_at": None,
+    }
+
+
+def _save_summary_state(conversation_id: Optional[str], content: str, covered_messages: int):
+    if not conversation_id:
+        return
+
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        return
+
+    conversation["context_summary"] = {
+        "content": content,
+        "covered_messages": covered_messages,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    save_conversation(conversation)
+
+
 async def build_conversation_context(
     conversation_history: List[Dict[str, Any]],
     limit: Optional[int] = None,
-    summarize_older: bool = True
+    summarize_older: bool = True,
+    conversation_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Build context for LLM from conversation history.
@@ -255,18 +307,21 @@ async def build_conversation_context(
         List of context messages for LLM consumption
     """
     from .config import (
-        CONVERSATION_HISTORY_LIMIT
+        CONVERSATION_HISTORY_LIMIT,
+        CONVERSATION_SUMMARY_THRESHOLD,
     )
 
     # Use configured limit if none provided
     if limit is None:
         limit = CONVERSATION_HISTORY_LIMIT
 
+    threshold_messages = CONVERSATION_SUMMARY_THRESHOLD * 2
+
     if len(conversation_history) <= limit * 2:  # *2 for user+assistant pairs
         # All messages fit in limit, return as-is
         return conversation_history
 
-    if not summarize_older:
+    if not summarize_older or len(conversation_history) < threshold_messages:
         # Just truncate to most recent messages
         return conversation_history[-limit * 2:]
 
@@ -283,7 +338,25 @@ async def build_conversation_context(
     # Create summary of older messages with error handling
     if older_messages:
         try:
-            summary = await summarize_conversation_segment(older_messages)
+            summary_state = _get_summary_state(conversation_id)
+            covered_messages = int(summary_state.get("covered_messages") or 0)
+            cached_summary = summary_state.get("content") or ""
+
+            if cached_summary and covered_messages == len(older_messages):
+                summary = cached_summary
+            elif cached_summary and covered_messages < len(older_messages):
+                incremental_messages = [
+                    {
+                        "role": "system",
+                        "content": f"Existing conversation summary: {cached_summary}",
+                    },
+                    *older_messages[covered_messages:],
+                ]
+                summary = await summarize_conversation_segment(incremental_messages)
+                _save_summary_state(conversation_id, summary, len(older_messages))
+            else:
+                summary = await summarize_conversation_segment(older_messages)
+                _save_summary_state(conversation_id, summary, len(older_messages))
 
             # Return summary + recent messages
             context = [
@@ -314,7 +387,7 @@ async def summarize_conversation_segment(
     Returns:
         Summary string
     """
-    from .config import SUMMARIZATION_MODEL, SUMMARIZATION_FALLBACK_MODELS
+    from .llm_settings import model_list, model_name
     from .openrouter import query_model
 
     # Build conversation text for summarization (limit to avoid token limits)
@@ -323,7 +396,7 @@ async def summarize_conversation_segment(
 
     for msg in messages:
         role = "User" if msg["role"] == "user" else "Assistant"
-        text = f"{role}: {msg['content']}\n\n"
+        text = f"{role}: {_content_to_text(msg.get('content'))}\n\n"
         if len(conversation_text) + len(text) > max_chars:
             break
         conversation_text += text
@@ -346,7 +419,10 @@ Please keep the summary under 300 words."""
     ]
 
     # Try primary model first
-    models_to_try = [SUMMARIZATION_MODEL] + SUMMARIZATION_FALLBACK_MODELS
+    models_to_try = [
+        model_name("summarization_model"),
+        *model_list("summarization_fallback_models"),
+    ]
 
     for i, model in enumerate(models_to_try):
         try:
@@ -369,7 +445,9 @@ Please keep the summary under 300 words."""
     print("All summarization models failed, falling back to simple truncation-based summary")
     try:
         simple_summary = "Conversation covers: " + ", ".join([
-            msg['content'][:50] + "..." if len(msg['content']) > 50 else msg['content']
+            _content_to_text(msg.get('content'))[:50] + "..."
+            if len(_content_to_text(msg.get('content'))) > 50
+            else _content_to_text(msg.get('content'))
             for msg in messages[:5]  # First 5 messages only
         ])
         return simple_summary
@@ -436,4 +514,3 @@ def get_file_queue(conversation_id: str) -> List[Dict[str, Any]]:
         raise ValueError(f"Conversation {conversation_id} not found")
 
     return conversation.get("file_queue", [])
-

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import LLMSettingsModal from './components/LLMSettingsModal';
 import { api } from './api';
 import './App.css';
 
@@ -11,6 +12,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeStreamId, setActiveStreamId] = useState(null);
   const [attachedFiles, setAttachedFiles] = useState([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Load conversations on mount
   useEffect(() => {
@@ -525,6 +527,7 @@ function App() {
         onNewConversation={handleNewConversation}
         onUpdateTitle={handleUpdateTitle}
         onDeleteConversation={handleDeleteConversation}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <ChatInterface
         conversation={currentConversation}
@@ -538,6 +541,11 @@ function App() {
         onFilesChange={setAttachedFiles}
         onFileUpload={handleFileUpload}
         onDeleteFile={handleDeleteFile}
+      />
+      <LLMSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        api={api}
       />
     </div>
   );

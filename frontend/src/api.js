@@ -214,6 +214,51 @@ export const api = {
   },
 
   /**
+   * Get runtime LLM settings.
+   */
+  async getLLMSettings() {
+    const response = await fetch(`${API_BASE}/api/settings/llm`);
+    if (!response.ok) {
+      throw new Error('Failed to get LLM settings');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update runtime LLM settings.
+   */
+  async updateLLMSettings(settings) {
+    const response = await fetch(`${API_BASE}/api/settings/llm`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update LLM settings');
+    }
+    return response.json();
+  },
+
+  /**
+   * Test a configured model connection.
+   */
+  async testLLMSettings(model) {
+    const response = await fetch(`${API_BASE}/api/settings/llm/test`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to test LLM settings');
+    }
+    return response.json();
+  },
+
+  /**
    * Send a message and receive streaming updates.
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content

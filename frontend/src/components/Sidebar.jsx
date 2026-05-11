@@ -8,6 +8,7 @@ export default function Sidebar({
   onNewConversation,
   onUpdateTitle,
   onDeleteConversation,
+  onOpenSettings,
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -47,6 +48,9 @@ export default function Sidebar({
         <h1>LLM Council</h1>
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
+        </button>
+        <button className="settings-btn" onClick={onOpenSettings}>
+          LLM Settings
         </button>
       </div>
 

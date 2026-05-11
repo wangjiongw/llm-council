@@ -11,13 +11,22 @@ import asyncio
 
 from . import storage
 from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_with_history, stage2_collect_rankings_with_history, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query
+from .llm_settings import public_llm_settings, update_llm_settings
+from .openrouter import query_model
 
 app = FastAPI(title="LLM Council API")
 
 # Enable CORS for local development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,6 +53,25 @@ class UpdateFileQueueRequest(BaseModel):
     files: List[Dict[str, Any]]
 
 
+class UpdateLLMSettingsRequest(BaseModel):
+    """Partial runtime LLM settings update."""
+    default_provider: Dict[str, Any] | None = None
+    council_models: List[str] | None = None
+    chairman_model: str | None = None
+    quick_model: str | None = None
+    quick_fallback_models: List[str] | None = None
+    title_model: str | None = None
+    title_fallback_models: List[str] | None = None
+    summarization_model: str | None = None
+    summarization_fallback_models: List[str] | None = None
+    model_overrides: Dict[str, Dict[str, Any]] | None = None
+
+
+class TestLLMSettingsRequest(BaseModel):
+    """Request to test a configured model connection."""
+    model: str
+
+
 class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
     id: str
@@ -64,6 +92,46 @@ class Conversation(BaseModel):
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
+
+
+@app.get("/api/settings/llm")
+async def get_llm_settings():
+    """Return runtime LLM settings with secrets redacted."""
+    return public_llm_settings()
+
+
+@app.patch("/api/settings/llm")
+async def patch_llm_settings(request: UpdateLLMSettingsRequest):
+    """Update runtime LLM settings."""
+    updates = request.model_dump(exclude_none=True)
+    return update_llm_settings(updates) and public_llm_settings()
+
+
+@app.post("/api/settings/llm/test")
+async def test_llm_settings(request: TestLLMSettingsRequest):
+    """Test the currently configured provider for a model."""
+    model = request.model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="Model is required")
+
+    response = await query_model(
+        model,
+        [{"role": "user", "content": "Reply with exactly: ok"}],
+        timeout=30.0,
+    )
+    if response and response.get("content"):
+        return {
+            "ok": True,
+            "model": response.get("model") or model,
+            "content": response.get("content"),
+            "usage": response.get("usage", {}),
+        }
+
+    return {
+        "ok": False,
+        "model": model,
+        "error": "No response from configured provider",
+    }
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -163,14 +231,6 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
-    # Add user message
-    storage.add_user_message(conversation_id, request.content)
-
-    # If this is the first message, generate a title
-    if is_first_message:
-        title = await generate_conversation_title(request.content)
-        storage.update_conversation_title(conversation_id, title)
-
     # Get conversation history for context (only if not first message)
     conversation_history = None
     if not is_first_message:
@@ -178,7 +238,18 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         raw_history = storage.get_conversation_history(conversation_id)
         if raw_history:
             # Build context with smart history management
-            conversation_history = await storage.build_conversation_context(raw_history)
+            conversation_history = await storage.build_conversation_context(
+                raw_history,
+                conversation_id=conversation_id,
+            )
+
+    # Add user message after building history so the current question is not duplicated
+    storage.add_user_message(conversation_id, request.content)
+
+    # If this is the first message, generate a title
+    if is_first_message:
+        title = await generate_conversation_title(request.content)
+        storage.update_conversation_title(conversation_id, title)
 
     # Run the 3-stage council process with conversation history
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
@@ -215,20 +286,23 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
-    # Add user message
+    # Get conversation history for context (only if not first message)
+    conversation_history = None
+    if not is_first_message:
+        raw_history = storage.get_conversation_history(conversation_id)
+        if raw_history:
+            conversation_history = await storage.build_conversation_context(
+                raw_history,
+                conversation_id=conversation_id,
+            )
+
+    # Add user message after building history so the current question is not duplicated
     storage.add_user_message(conversation_id, request.content)
 
     # If this is the first message, generate a title
     if is_first_message:
         title = await generate_conversation_title(request.content)
         storage.update_conversation_title(conversation_id, title)
-
-    # Get conversation history for context (only if not first message)
-    conversation_history = None
-    if not is_first_message:
-        raw_history = storage.get_conversation_history(conversation_id)
-        if raw_history:
-            conversation_history = await storage.build_conversation_context(raw_history)
 
     # Run quick query
     quick_result = await quick_query(request.content, conversation_history)
@@ -263,9 +337,6 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
     async def event_generator():
         try:
-            # Add user message
-            storage.add_user_message(conversation_id, request.content)
-
             # Get conversation history for context (only if not first message)
             conversation_history = None
             if not is_first_message:
@@ -273,7 +344,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 raw_history = storage.get_conversation_history(conversation_id)
                 if raw_history:
                     # Build context with smart history management
-                    conversation_history = await storage.build_conversation_context(raw_history)
+                    conversation_history = await storage.build_conversation_context(
+                        raw_history,
+                        conversation_id=conversation_id,
+                    )
+
+            # Add user message after building history so the current question is not duplicated
+            storage.add_user_message(conversation_id, request.content)
 
             # Start title generation in parallel (don't await yet)
             title_task = None
@@ -395,7 +472,10 @@ async def send_message_with_files(
         raw_history = storage.get_conversation_history(conversation_id)
         conversation_history = None
         if raw_history:
-            conversation_history = await storage.build_conversation_context(raw_history)
+            conversation_history = await storage.build_conversation_context(
+                raw_history,
+                conversation_id=conversation_id,
+            )
 
         stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
             content_array,

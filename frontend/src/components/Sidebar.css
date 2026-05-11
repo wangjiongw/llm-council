@@ -36,6 +36,25 @@
   border-color: #357abd;
 }
 
+.settings-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  color: #333;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s, border-color 0.2s;
+  font-weight: 500;
+}
+
+.settings-btn:hover {
+  background: #f0f6ff;
+  border-color: #4a90e2;
+}
+
 .conversation-list {
   flex: 1;
   overflow-y: auto;
@@ -191,4 +210,3 @@
 .title-cancel-btn:hover {
   background: #ff7875;
 }
-
