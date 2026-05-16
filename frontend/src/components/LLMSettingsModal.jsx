@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import './LLMSettingsModal.css';
 
 const emptySettings = {
-  default_provider: { base_url: '', api_key: '' },
+  default_provider: { base_url: '', api_key: '', timeout: 180, stream: true },
   council_models: [],
   chairman_model: '',
   quick_model: '',
@@ -22,12 +22,18 @@ const splitLines = (value) =>
 
 const joinLines = (value) => (Array.isArray(value) ? value.join('\n') : '');
 
+const parseTimeout = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
 export default function LLMSettingsModal({ open, onClose, api }) {
   const [settings, setSettings] = useState(emptySettings);
   const [defaultApiKey, setDefaultApiKey] = useState('');
   const [overrideModel, setOverrideModel] = useState('');
   const [overrideBaseUrl, setOverrideBaseUrl] = useState('');
   const [overrideApiKey, setOverrideApiKey] = useState('');
+  const [overrideTimeout, setOverrideTimeout] = useState('');
   const [status, setStatus] = useState('');
   const [testModel, setTestModel] = useState('');
   const [testResult, setTestResult] = useState(null);
@@ -81,6 +87,7 @@ export default function LLMSettingsModal({ open, onClose, api }) {
   const handleAddOverride = () => {
     const model = overrideModel.trim();
     if (!model) return;
+    const timeout = parseTimeout(overrideTimeout);
 
     setSettings(prev => ({
       ...prev,
@@ -89,12 +96,14 @@ export default function LLMSettingsModal({ open, onClose, api }) {
         [model]: {
           base_url: overrideBaseUrl.trim(),
           ...(overrideApiKey.trim() ? { api_key: overrideApiKey.trim() } : {}),
+          ...(timeout ? { timeout } : {}),
         },
       },
     }));
     setOverrideModel('');
     setOverrideBaseUrl('');
     setOverrideApiKey('');
+    setOverrideTimeout('');
   };
 
   const handleRemoveOverride = (model) => {
@@ -106,13 +115,14 @@ export default function LLMSettingsModal({ open, onClose, api }) {
   };
 
   const buildPayload = () => {
+    const defaultTimeout = parseTimeout(settings.default_provider.timeout);
     const modelOverrides = Object.fromEntries(
       Object.entries(settings.model_overrides || {}).map(([model, override]) => [
         model,
         {
           ...(override.base_url ? { base_url: override.base_url } : {}),
           ...(override.api_key ? { api_key: override.api_key } : {}),
-          ...(override.timeout ? { timeout: override.timeout } : {}),
+          ...(parseTimeout(override.timeout) ? { timeout: parseTimeout(override.timeout) } : {}),
           ...(override.enabled === false ? { enabled: false } : {}),
         },
       ])
@@ -122,6 +132,8 @@ export default function LLMSettingsModal({ open, onClose, api }) {
       ...settings,
       default_provider: {
         base_url: settings.default_provider.base_url || '',
+        ...(defaultTimeout ? { timeout: defaultTimeout } : {}),
+        stream: settings.default_provider.stream !== false,
       },
       model_overrides: modelOverrides,
     };
@@ -200,6 +212,24 @@ export default function LLMSettingsModal({ open, onClose, api }) {
                 type="password"
               />
             </label>
+            <label>
+              Default timeout (seconds)
+              <input
+                type="number"
+                min="1"
+                value={settings.default_provider.timeout || ''}
+                onChange={e => updateDefaultProvider('timeout', e.target.value)}
+                placeholder="180"
+              />
+            </label>
+            <label className="settings-checkbox-label">
+              <input
+                type="checkbox"
+                checked={settings.default_provider.stream !== false}
+                onChange={e => updateDefaultProvider('stream', e.target.checked)}
+              />
+              Stream upstream LLM responses
+            </label>
           </section>
 
           <section className="settings-section">
@@ -245,6 +275,14 @@ export default function LLMSettingsModal({ open, onClose, api }) {
               />
             </label>
             <label>
+              Title fallback
+              <textarea
+                rows={3}
+                value={joinLines(settings.title_fallback_models)}
+                onChange={e => updateField('title_fallback_models', splitLines(e.target.value))}
+              />
+            </label>
+            <label>
               Summary fallback
               <textarea
                 rows={3}
@@ -268,12 +306,25 @@ export default function LLMSettingsModal({ open, onClose, api }) {
               API Key
               <input value={overrideApiKey} onChange={e => setOverrideApiKey(e.target.value)} type="password" placeholder="Optional override" />
             </label>
+            <label>
+              Timeout seconds
+              <input
+                type="number"
+                min="1"
+                value={overrideTimeout}
+                onChange={e => setOverrideTimeout(e.target.value)}
+                placeholder="Optional override, e.g. 600"
+              />
+            </label>
             <button className="settings-secondary-btn" onClick={handleAddOverride}>Add Override</button>
             <div className="override-list">
               {Object.entries(settings.model_overrides || {}).map(([model, override]) => (
                 <div className="override-row" key={model}>
                   <span>{model}</span>
-                  <small>{override.base_url || 'default URL'} · {override.api_key_set || override.api_key ? 'key set' : 'default key'}</small>
+                  <small>
+                    {override.base_url || 'default URL'} · {override.api_key_set || override.api_key ? 'key set' : 'default key'}
+                    {override.timeout ? ` · timeout ${override.timeout}s` : ''}
+                  </small>
                   <button onClick={() => handleRemoveOverride(model)}>Remove</button>
                 </div>
               ))}

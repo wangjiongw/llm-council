@@ -86,6 +86,16 @@
   font-weight: 600;
 }
 
+.settings-section .settings-checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-section .settings-checkbox-label input {
+  width: auto;
+}
+
 .settings-section input,
 .settings-section textarea,
 .settings-test-row input {
