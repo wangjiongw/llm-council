@@ -62,6 +62,16 @@ function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false 
     return null;
   }
 
+  const activeRanking = rankings[activeTab];
+  const isFailed = activeRanking.status === 'failed';
+  const failureDetails = [
+    activeRanking.error_type && `Type: ${activeRanking.error_type}`,
+    activeRanking.error && `Error: ${activeRanking.error}`,
+    activeRanking.duration_seconds != null && `Duration: ${activeRanking.duration_seconds}s`,
+    activeRanking.timeout_seconds != null && `Timeout: ${activeRanking.timeout_seconds}s`,
+    activeRanking.status_code != null && `HTTP status: ${activeRanking.status_code}`,
+  ].filter(Boolean).join('\n');
+
   return (
     <div className="stage stage2">
       <h3 className="stage-title">
@@ -83,10 +93,11 @@ function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false 
         {rankings.map((rank, index) => (
           <button
             key={index}
-            className={`tab ${activeTab === index ? 'active' : ''}`}
+            className={`tab ${activeTab === index ? 'active' : ''} ${rank.status === 'failed' ? 'failed' : ''}`}
             onClick={() => setActiveTab(index)}
           >
             {rank.model.split('/')[1] || rank.model}
+            {rank.status === 'failed' ? ' · failed' : ''}
           </button>
         ))}
       </div>
@@ -94,33 +105,42 @@ function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false 
       <div className="tab-content">
         <div className="ranking-header">
           <div className="ranking-model">
-            {rankings[activeTab].model}
+            {activeRanking.model}
+            {isFailed && <span className="status-failed">failed</span>}
           </div>
-          <CopyButton
-            content={deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
-            onCopy={() => console.log(`Copied evaluation from ${rankings[activeTab].model}`)}
-          />
+          {!isFailed && (
+            <CopyButton
+              content={deAnonymizeText(activeRanking.ranking, labelToModel)}
+              onCopy={() => console.log(`Copied evaluation from ${activeRanking.model}`)}
+            />
+          )}
         </div>
-        <div className="ranking-content markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
-          </ReactMarkdown>
-        </div>
+        {isFailed ? (
+          <pre className="failure-details">{failureDetails}</pre>
+        ) : (
+          <>
+            <div className="ranking-content markdown-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {deAnonymizeText(activeRanking.ranking, labelToModel)}
+              </ReactMarkdown>
+            </div>
 
-        {rankings[activeTab].parsed_ranking &&
-         rankings[activeTab].parsed_ranking.length > 0 && (
-          <div className="parsed-ranking">
-            <strong>Extracted Ranking:</strong>
-            <ol>
-              {rankings[activeTab].parsed_ranking.map((label, i) => (
-                <li key={i}>
-                  {labelToModel && labelToModel[label]
-                    ? labelToModel[label].split('/')[1] || labelToModel[label]
-                    : label}
-                </li>
-              ))}
-            </ol>
-          </div>
+            {activeRanking.parsed_ranking &&
+             activeRanking.parsed_ranking.length > 0 && (
+              <div className="parsed-ranking">
+                <strong>Extracted Ranking:</strong>
+                <ol>
+                  {activeRanking.parsed_ranking.map((label, i) => (
+                    <li key={i}>
+                      {labelToModel && labelToModel[label]
+                        ? labelToModel[label].split('/')[1] || labelToModel[label]
+                        : label}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </>
         )}
       </div>
 

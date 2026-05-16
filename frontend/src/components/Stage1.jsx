@@ -50,6 +50,16 @@ function Stage1({ responses }) {
     return null;
   }
 
+  const activeResponse = responses[activeTab];
+  const isFailed = activeResponse.status === 'failed';
+  const failureDetails = [
+    activeResponse.error_type && `Type: ${activeResponse.error_type}`,
+    activeResponse.error && `Error: ${activeResponse.error}`,
+    activeResponse.duration_seconds != null && `Duration: ${activeResponse.duration_seconds}s`,
+    activeResponse.timeout_seconds != null && `Timeout: ${activeResponse.timeout_seconds}s`,
+    activeResponse.status_code != null && `HTTP status: ${activeResponse.status_code}`,
+  ].filter(Boolean).join('\n');
+
   return (
     <div className="stage stage1">
       <h3 className="stage-title">Stage 1: Individual Responses</h3>
@@ -58,25 +68,35 @@ function Stage1({ responses }) {
         {responses.map((resp, index) => (
           <button
             key={index}
-            className={`tab ${activeTab === index ? 'active' : ''}`}
+            className={`tab ${activeTab === index ? 'active' : ''} ${resp.status === 'failed' ? 'failed' : ''}`}
             onClick={() => setActiveTab(index)}
           >
             {resp.model.split('/')[1] || resp.model}
+            {resp.status === 'failed' ? ' · failed' : ''}
           </button>
         ))}
       </div>
 
       <div className="tab-content">
         <div className="response-header">
-          <div className="model-name">{responses[activeTab].model}</div>
-          <CopyButton
-            content={responses[activeTab].response}
-            onCopy={() => console.log(`Copied response from ${responses[activeTab].model}`)}
-          />
+          <div className="model-name">
+            {activeResponse.model}
+            {isFailed && <span className="status-failed">failed</span>}
+          </div>
+          {!isFailed && (
+            <CopyButton
+              content={activeResponse.response}
+              onCopy={() => console.log(`Copied response from ${activeResponse.model}`)}
+            />
+          )}
         </div>
-        <div className="response-text markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{responses[activeTab].response}</ReactMarkdown>
-        </div>
+        {isFailed ? (
+          <pre className="failure-details">{failureDetails}</pre>
+        ) : (
+          <div className="response-text markdown-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeResponse.response}</ReactMarkdown>
+          </div>
+        )}
       </div>
     </div>
   );

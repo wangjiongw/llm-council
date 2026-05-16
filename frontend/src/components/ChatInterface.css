@@ -169,6 +169,62 @@
   font-style: italic;
 }
 
+.stage-loading-block {
+  margin: 12px 0;
+}
+
+.stage-loading-block .stage-loading {
+  margin-bottom: 8px;
+}
+
+.model-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #e0e7ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.model-status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.model-status-name {
+  min-width: 180px;
+  color: #333;
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.model-status-state {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #e6f4ff;
+  color: #0958d9;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.model-status-item.failed .model-status-state {
+  background: #ffebe9;
+  color: #cf222e;
+}
+
+.model-status-meta {
+  color: #57606a;
+}
+
+.model-status-error {
+  color: #cf222e;
+  font-family: monospace;
+}
+
 .spinner {
   width: 20px;
   height: 20px;

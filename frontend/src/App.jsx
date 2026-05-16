@@ -11,6 +11,8 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeStreamId, setActiveStreamId] = useState(null);
+  const [inFlightDraft, setInFlightDraft] = useState(null);
+  const [draftToRestore, setDraftToRestore] = useState(null);
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -198,9 +200,18 @@ function App() {
   };
 
   const handleStopQuery = () => {
+    const draft = inFlightDraft;
+
     api.cancelStream();
     setIsLoading(false);
     setActiveStreamId(null);
+    setInFlightDraft(null);
+    if (draft) {
+      setDraftToRestore({
+        ...draft,
+        restoreId: `${draft.id}-stopped-${Date.now()}`,
+      });
+    }
 
     // Remove the optimistic messages for the in-flight turn.
     setCurrentConversation((prev) => {
@@ -256,6 +267,36 @@ function App() {
     handleSendMessage(lastUserMessage.content);
   };
 
+  const applyModelStatusEvent = (event) => {
+    setCurrentConversation((prev) => {
+      const messages = [...prev.messages];
+      const lastMsg = messages[messages.length - 1];
+      if (!lastMsg || lastMsg.role !== 'assistant' || !event.stage || !event.model) {
+        return prev;
+      }
+
+      const currentModelStatus = lastMsg.modelStatus || {};
+      const currentStageStatus = currentModelStatus[event.stage] || {};
+      lastMsg.modelStatus = {
+        ...currentModelStatus,
+        [event.stage]: {
+          ...currentStageStatus,
+          [event.model]: {
+            ...(currentStageStatus[event.model] || {}),
+            model: event.model,
+            status: event.status,
+            error_type: event.error_type,
+            error: event.error,
+            duration_seconds: event.duration_seconds,
+            first_event_seconds: event.first_event_seconds,
+            streamed: event.streamed,
+          },
+        },
+      };
+      return { ...prev, messages };
+    });
+  };
+
   const handleSendMessage = async (content, files = attachedFiles) => {
     if (!currentConversationId) return;
 
@@ -263,6 +304,12 @@ function App() {
     setIsLoading(true);
     const streamId = Date.now().toString(); // Unique ID for this stream
     setActiveStreamId(streamId);
+    setInFlightDraft({
+      id: streamId,
+      content,
+      hasFiles,
+    });
+    setDraftToRestore(null);
 
     try {
       // Extract file metadata for UI display
@@ -313,6 +360,7 @@ function App() {
         loadConversations();
         setIsLoading(false);
         setActiveStreamId(null);
+        setInFlightDraft(null);
       } else {
         // Create a partial assistant message that will be updated progressively
         const assistantMessage = {
@@ -321,6 +369,10 @@ function App() {
           stage2: null,
           stage3: null,
           metadata: null,
+          modelStatus: {
+            stage1: {},
+            stage2: {},
+          },
           loading: {
             stage1: false,
             stage2: false,
@@ -336,6 +388,11 @@ function App() {
 
         // Use streaming endpoint for text-only messages
         await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
+        if (eventType.startsWith('stage1_model_') || eventType.startsWith('stage2_model_')) {
+          applyModelStatusEvent(event);
+          return;
+        }
+
         switch (eventType) {
           case 'stage1_start':
             setCurrentConversation((prev) => {
@@ -405,12 +462,14 @@ function App() {
             loadConversations();
             setIsLoading(false);
             setActiveStreamId(null);
+            setInFlightDraft(null);
             break;
 
           case 'error':
             console.error('Stream error:', event.message);
             setIsLoading(false);
             setActiveStreamId(null);
+            setInFlightDraft(null);
             break;
 
           default:
@@ -434,6 +493,7 @@ function App() {
       }));
       setIsLoading(false);
       setActiveStreamId(null);
+      setInFlightDraft(null);
     }
   };
 
@@ -443,6 +503,12 @@ function App() {
     setIsLoading(true);
     const requestId = Date.now().toString();
     setActiveStreamId(requestId);
+    setInFlightDraft({
+      id: requestId,
+      content,
+      hasFiles: files.length > 0,
+    });
+    setDraftToRestore(null);
 
     try {
       // Extract file metadata for UI display
@@ -524,6 +590,7 @@ function App() {
     } finally {
       setIsLoading(false);
       setActiveStreamId(null);
+      setInFlightDraft(null);
     }
   };
 
@@ -550,6 +617,8 @@ function App() {
         onFilesChange={setAttachedFiles}
         onFileUpload={handleFileUpload}
         onDeleteFile={handleDeleteFile}
+        draftToRestore={draftToRestore}
+        onDraftRestored={() => setDraftToRestore(null)}
       />
       <LLMSettingsModal
         open={settingsOpen}

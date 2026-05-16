@@ -40,6 +40,37 @@ const CollapsibleStage = memo(function CollapsibleStage({
   );
 });
 
+const ModelStatusList = memo(function ModelStatusList({ statuses }) {
+  const items = Object.values(statuses || {});
+  if (items.length === 0) return null;
+
+  const labelFor = (status) => {
+    if (status === 'first_event') return 'streaming';
+    if (status === 'success') return 'done';
+    return status || 'pending';
+  };
+
+  return (
+    <div className="model-status-list">
+      {items.map(item => (
+        <div className={`model-status-item ${item.status === 'failed' ? 'failed' : ''}`} key={item.model}>
+          <span className="model-status-name">{item.model.split('/')[1] || item.model}</span>
+          <span className="model-status-state">{labelFor(item.status)}</span>
+          {item.first_event_seconds != null && (
+            <span className="model-status-meta">first event {item.first_event_seconds}s</span>
+          )}
+          {item.duration_seconds != null && (
+            <span className="model-status-meta">total {item.duration_seconds}s</span>
+          )}
+          {item.error_type && (
+            <span className="model-status-error">{item.error_type}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+});
+
 // Memoized message item to prevent re-renders when typing
 const MessageItem = memo(function MessageItem({
   msg,
@@ -119,14 +150,17 @@ const MessageItem = memo(function MessageItem({
 
           {/* Enhanced loading states with context awareness */}
           {msg.loading?.stage1 && (
-            <div className="stage-loading">
-              <div className="spinner"></div>
-              <span>
-                {hasPreviousTurns
-                  ? `Running Stage 1 with ${conversationContext.turnCount} previous turns of context...`
-                  : 'Running Stage 1: Collecting individual responses...'
-                }
-              </span>
+            <div className="stage-loading-block">
+              <div className="stage-loading">
+                <div className="spinner"></div>
+                <span>
+                  {hasPreviousTurns
+                    ? `Running Stage 1 with ${conversationContext.turnCount} previous turns of context...`
+                    : 'Running Stage 1: Collecting individual responses...'
+                  }
+                </span>
+              </div>
+              <ModelStatusList statuses={msg.modelStatus?.stage1} />
             </div>
           )}
           {msg.stage1 && (
@@ -136,14 +170,17 @@ const MessageItem = memo(function MessageItem({
           )}
 
           {msg.loading?.stage2 && (
-            <div className="stage-loading">
-              <div className="spinner"></div>
-              <span>
-                {hasPreviousTurns
-                  ? 'Running Stage 2: Peer rankings with conversation context...'
-                  : 'Running Stage 2: Peer rankings...'
-                }
-              </span>
+            <div className="stage-loading-block">
+              <div className="stage-loading">
+                <div className="spinner"></div>
+                <span>
+                  {hasPreviousTurns
+                    ? 'Running Stage 2: Peer rankings with conversation context...'
+                    : 'Running Stage 2: Peer rankings...'
+                  }
+                </span>
+              </div>
+              <ModelStatusList statuses={msg.modelStatus?.stage2} />
             </div>
           )}
           {msg.stage2 && (
@@ -201,6 +238,8 @@ export default function ChatInterface({
   onFilesChange,
   onFileUpload,
   onDeleteFile,
+  draftToRestore,
+  onDraftRestored,
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
@@ -317,6 +356,18 @@ export default function ChatInterface({
     adjustInputHeight();
   }, [input, adjustInputHeight]);
 
+  useEffect(() => {
+    if (!draftToRestore) return undefined;
+
+    const frameId = window.requestAnimationFrame(() => {
+      setInput(draftToRestore.content || '');
+      inputRef.current?.focus();
+      onDraftRestored?.(draftToRestore.restoreId || draftToRestore.id);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [draftToRestore, onDraftRestored]);
+
   // File handling functions
   const handleFileUploadLocal = useCallback(async (newFiles) => {
     await onFileUpload(newFiles);
@@ -408,7 +459,7 @@ export default function ChatInterface({
     if (!isLoading || !onStopQuery) return undefined;
 
     const handleGlobalKeyDown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+      if (e.key === 'Escape' && !e.repeat) {
         e.preventDefault();
         onStopQuery();
       }
@@ -503,7 +554,7 @@ export default function ChatInterface({
                 className="message-input"
                 placeholder={
                   isLoading
-                    ? "Query in progress... (Ctrl+C to stop)"
+                    ? "Query in progress... (Esc to stop)"
                     : hasPreviousTurns
                       ? "Continue... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
                       : "Ask... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
@@ -531,8 +582,8 @@ export default function ChatInterface({
                 type="button"
                 className="stop-button"
                 onClick={onStopQuery}
-                title="Stop current query"
-                aria-label="Stop current query"
+                title="Stop current query (Esc)"
+                aria-label="Stop current query (Esc)"
               >
                 ⏹️ Stop
               </button>

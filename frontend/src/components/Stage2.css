@@ -120,6 +120,12 @@
   font-weight: 600;
 }
 
+.stage2 .tab.failed {
+  color: #cf222e;
+  border-color: #f0b8bd;
+  background: #fff5f5;
+}
+
 .stage2 .tab-content {
   background: #ffffff;
   padding: 16px;
@@ -139,6 +145,29 @@
   color: #888;
   font-size: 12px;
   font-family: monospace;
+}
+
+.status-failed {
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #ffebe9;
+  color: #cf222e;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.failure-details {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #f0b8bd;
+  border-radius: 6px;
+  background: #fff5f5;
+  color: #7d0c16;
+  white-space: pre-wrap;
+  font-size: 13px;
 }
 
 .ranking-content {
