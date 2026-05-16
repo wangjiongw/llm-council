@@ -14,6 +14,12 @@ load_dotenv()
 load_dotenv(Path(__file__).with_name(".env"))
 
 SETTINGS_PATH = Path(DATA_DIR) / "llm_settings.json"
+IMPLICIT_FALLBACK_MODEL = "gpt-5-nano"
+FALLBACK_MODEL_LIST_KEYS = {
+    "quick_fallback_models",
+    "title_fallback_models",
+    "summarization_fallback_models",
+}
 
 
 def _env(*names: str) -> str:
@@ -28,6 +34,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "default_provider": {
         "base_url": _env("OPENAI_API_BASE_URL", "OPENROUTER_API_BASE_URL"),
         "api_key": _env("OPENAI_API_KEY", "OPENROUTER_API_KEY"),
+        "timeout": 180,
+        "stream": True,
     },
     "council_models": [
         "anthropic/claude-sonnet-4.5",
@@ -40,10 +48,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "title_model": "gemini-2.5-flash",
     "title_fallback_models": [],
     "summarization_model": "gemini-2.5-flash",
-    "summarization_fallback_models": [
-        "openai/gpt-4o-mini",
-        "anthropic/claude-haiku",
-    ],
+    "summarization_fallback_models": [],
     "model_overrides": {},
 }
 
@@ -125,13 +130,17 @@ def resolve_model_config(model: str) -> Dict[str, Any]:
         "chat_url": f"{base_url}/chat/completions",
         "timeout": float(provider.get("timeout") or 120.0),
         "enabled": bool(provider.get("enabled", True)),
+        "stream": bool(provider.get("stream", True)),
     }
 
 
 def model_list(key: str) -> List[str]:
     """Read a model list from runtime settings."""
     value = load_llm_settings().get(key, [])
-    return value if isinstance(value, list) else []
+    configured_models = value if isinstance(value, list) else []
+    if key in FALLBACK_MODEL_LIST_KEYS and not configured_models:
+        return [IMPLICIT_FALLBACK_MODEL]
+    return configured_models
 
 
 def model_name(key: str) -> str:

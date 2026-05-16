@@ -10,7 +10,7 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_with_history, stage2_collect_rankings_with_history, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query
+from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results
 from .llm_settings import public_llm_settings, update_llm_settings
 from .openrouter import query_model
 
@@ -337,6 +337,25 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
     async def event_generator():
         try:
+            async def drain_model_events(task: asyncio.Task, queue: asyncio.Queue):
+                while not task.done():
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                while not queue.empty():
+                    event = queue.get_nowait()
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            async def enqueue_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await queue.put({
+                    key: value
+                    for key, value in event.items()
+                    if value is not None
+                })
+
             # Get conversation history for context (only if not first message)
             conversation_history = None
             if not is_first_message:
@@ -359,12 +378,60 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Stage 1: Collect responses with history context
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses_with_history(request.content, conversation_history)
+            stage1_queue: asyncio.Queue = asyncio.Queue()
+            stage1_task = asyncio.create_task(stage1_collect_responses_streaming(
+                request.content,
+                conversation_history,
+                event_callback=lambda event: enqueue_model_event(stage1_queue, event),
+            ))
+            async for event_chunk in drain_model_events(stage1_task, stage1_queue):
+                yield event_chunk
+            stage1_results = await stage1_task
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
+
+            if not has_successful_stage1_results(stage1_results):
+                metadata = {
+                    "label_to_model": {},
+                    "aggregate_rankings": [],
+                    "warnings": ["All Stage 1 model calls failed."],
+                }
+                stage2_results = []
+                stage3_result = {
+                    "model": "error",
+                    "status": "failed",
+                    "response": "All models failed to respond. Please try again.",
+                    "error_type": "all_stage1_models_failed",
+                    "error": "No Stage 1 model returned a usable response.",
+                }
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+
+                if title_task:
+                    title = await title_task
+                    storage.update_conversation_title(conversation_id, title)
+                    yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+
+                storage.add_assistant_message(
+                    conversation_id,
+                    stage1_results,
+                    stage2_results,
+                    stage3_result
+                )
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                return
 
             # Stage 2: Collect rankings with history context
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings_with_history(request.content, stage1_results, conversation_history)
+            stage2_queue: asyncio.Queue = asyncio.Queue()
+            stage2_task = asyncio.create_task(stage2_collect_rankings_streaming(
+                request.content,
+                stage1_results,
+                conversation_history,
+                event_callback=lambda event: enqueue_model_event(stage2_queue, event),
+            ))
+            async for event_chunk in drain_model_events(stage2_task, stage2_queue):
+                yield event_chunk
+            stage2_results, label_to_model = await stage2_task
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 

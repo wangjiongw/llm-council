@@ -34,4 +34,4 @@ DATA_DIR = "data/conversations"
 CONVERSATION_HISTORY_LIMIT = 10  # Number of recent turns to include in full context
 CONVERSATION_SUMMARY_THRESHOLD = 20  # When to start summarizing older messages
 SUMMARIZATION_MODEL = "gpt-5.4-nano"  # Fast model for summarization
-SUMMARIZATION_FALLBACK_MODELS = ["deepseek-v4-flash", "gpt-5-nano"]  # Backup models
+SUMMARIZATION_FALLBACK_MODELS = []  # Runtime settings provide the implicit gpt-5-nano fallback.

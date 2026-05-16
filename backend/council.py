@@ -1,5 +1,6 @@
 """3-stage LLM Council orchestration."""
 
+import asyncio
 from typing import List, Dict, Any, Tuple, Union
 from .openrouter import query_models_parallel, query_model, query_model_with_fallbacks
 from .llm_settings import model_list, model_name
@@ -8,6 +9,286 @@ from .llm_settings import model_list, model_name
 def get_council_models() -> List[str]:
     """Return currently configured council models."""
     return model_list("council_models")
+
+
+def _is_successful_result(result: Dict[str, Any]) -> bool:
+    """Return True when a stage result contains usable model content."""
+    return result.get("status", "success") == "success"
+
+
+def _successful_stage1_results(stage1_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Stage 1 records that can be used as peer-evaluation inputs."""
+    return [
+        result
+        for result in stage1_results
+        if _is_successful_result(result) and bool(result.get("response"))
+    ]
+
+
+def has_successful_stage1_results(stage1_results: List[Dict[str, Any]]) -> bool:
+    """Return True when at least one Stage 1 response can be used downstream."""
+    return bool(_successful_stage1_results(stage1_results))
+
+
+def _successful_stage2_results(stage2_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Stage 2 records that can be used for synthesis and aggregation."""
+    return [
+        result
+        for result in stage2_results
+        if _is_successful_result(result) and bool(result.get("ranking"))
+    ]
+
+
+def _format_stage_failure(model: str, response: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Persist non-secret failure details for a model call."""
+    response = response or {}
+    failure = {
+        "model": model,
+        "status": "failed",
+        "error_type": response.get("error_type", "no_response"),
+        "error": response.get("error", "No response returned from model call"),
+    }
+    for key in ("timeout_seconds", "duration_seconds", "status_code"):
+        if key in response:
+            failure[key] = response[key]
+    return failure
+
+
+def _format_stage1_result(model: str, response: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Format a raw model response for Stage 1 persistence."""
+    if not response or response.get("status", "success") != "success":
+        return _format_stage_failure(model, response)
+
+    return {
+        "model": model,
+        "status": "success",
+        "response": response.get('content', ''),
+        "response_id": response.get('id'),
+        "usage": response.get('usage', {}),
+        "finish_reason": response.get('finish_reason'),
+        "duration_seconds": response.get("duration_seconds"),
+        "first_event_seconds": response.get("first_event_seconds"),
+        "streamed": bool(response.get("streamed")),
+    }
+
+
+def _format_stage2_result(model: str, response: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Format a raw model response for Stage 2 persistence."""
+    if not response or response.get("status", "success") != "success":
+        return _format_stage_failure(model, response)
+
+    full_text = response.get('content', '')
+    return {
+        "model": model,
+        "status": "success",
+        "ranking": full_text,
+        "parsed_ranking": parse_ranking_from_text(full_text),
+        "response_id": response.get('id'),
+        "usage": response.get('usage', {}),
+        "finish_reason": response.get('finish_reason'),
+        "duration_seconds": response.get("duration_seconds"),
+        "first_event_seconds": response.get("first_event_seconds"),
+        "streamed": bool(response.get("streamed")),
+    }
+
+
+def _metadata_warnings(stage1_results: List[Dict[str, Any]], stage2_results: List[Dict[str, Any]] | None = None) -> List[str]:
+    """Build user/debug-visible warnings without feeding them into prompts."""
+    warnings = []
+    successful_stage1_count = len(_successful_stage1_results(stage1_results))
+    if successful_stage1_count < len(stage1_results):
+        warnings.append(
+            f"Stage 1 had {len(stage1_results) - successful_stage1_count} failed model call(s)."
+        )
+    if successful_stage1_count < 2:
+        warnings.append(
+            f"Stage 1 only had {successful_stage1_count} successful response(s); peer ranking may be less reliable."
+        )
+
+    if stage2_results is not None:
+        successful_stage2_count = len(_successful_stage2_results(stage2_results))
+        if successful_stage2_count < len(stage2_results):
+            warnings.append(
+                f"Stage 2 had {len(stage2_results) - successful_stage2_count} failed model call(s)."
+            )
+
+    return warnings
+
+
+async def _emit_stage_event(event_callback, event: Dict[str, Any]) -> None:
+    """Emit a stage progress event to sync or async callbacks."""
+    if not event_callback:
+        return
+    result = event_callback(event)
+    if result:
+        await result
+
+
+def _build_stage1_messages(
+    user_query: Union[str, List[Dict[str, Any]]],
+    conversation_history: List[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Build Stage 1 messages with optional conversation context."""
+    if conversation_history:
+        context_text = "Previous conversation context:\n\n"
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            context_text += f"{role}: {content_text}\n\n"
+
+        if isinstance(user_query, str):
+            context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
+            return [{"role": "user", "content": context_text}]
+
+        context_item = {"type": "text", "text": f"{context_text}\n\n"}
+        return [{"role": "user", "content": [context_item, *user_query]}]
+
+    return [{"role": "user", "content": user_query}]
+
+
+def _query_text(user_query: Union[str, List[Dict[str, Any]]]) -> str:
+    """Extract user-visible text from text or multimodal query content."""
+    if isinstance(user_query, str):
+        return user_query
+    text_parts = [q.get('text', '') for q in user_query if q.get('type') == 'text']
+    return ' '.join(text_parts)
+
+
+def _content_text(content: Any) -> str:
+    """Extract text from stored conversation content."""
+    if isinstance(content, list):
+        text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+        return ' '.join(text_parts)
+    return content
+
+
+def _build_stage2_messages(
+    user_query: Union[str, List[Dict[str, Any]]],
+    stage1_results: List[Dict[str, Any]],
+    conversation_history: List[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Build Stage 2 messages and label mapping from successful Stage 1 records."""
+    rankable_stage1_results = _successful_stage1_results(stage1_results)
+    labels = [chr(65 + i) for i in range(len(rankable_stage1_results))]
+    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, rankable_stage1_results)}
+    query_text = _query_text(user_query)
+
+    prompt_parts = []
+    if conversation_history:
+        prompt_parts.append("Previous conversation context:")
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            prompt_parts.append(f"{role}: {_content_text(msg.get('content', ''))}")
+        prompt_parts.append("")
+
+    prompt_parts.extend([
+        f"Current question: {query_text}",
+        "",
+        "Here are the anonymized responses from the council members:",
+        ""
+    ])
+
+    for label, result in zip(labels, rankable_stage1_results):
+        prompt_parts.append(f"**Response {label}:**")
+        prompt_parts.append(result["response"])
+        prompt_parts.append("")
+
+    prompt_parts.extend([
+        "Please evaluate each response based on:",
+        "1. Accuracy and factual correctness",
+        "2. Insightfulness and depth",
+        "3. Clarity and coherence",
+        "4. Relevance to the question and conversation context",
+        "",
+        "Consider the conversation context when evaluating responses.",
+        "",
+        "After evaluating each response, please provide a final ranking from best to worst.",
+        "",
+        "**FINAL RANKING:**",
+        "1. Response X (best)",
+        "2. Response Y",
+        "3. Response Z",
+        "... (worst)",
+        "",
+        "Do not include any text after the ranking section."
+    ])
+
+    return [{"role": "user", "content": "\n".join(prompt_parts)}], label_to_model
+
+
+async def _query_stage_model_with_events(
+    *,
+    stage: str,
+    index: int,
+    model: str,
+    messages: List[Dict[str, Any]],
+    formatter,
+    event_callback,
+) -> Tuple[int, Dict[str, Any]]:
+    """Query one model and emit lifecycle status events."""
+    await _emit_stage_event(event_callback, {
+        "type": f"{stage}_model_start",
+        "stage": stage,
+        "model": model,
+        "status": "started",
+    })
+
+    async def on_model_event(event: Dict[str, Any]) -> None:
+        status = event.get("status", "running")
+        await _emit_stage_event(event_callback, {
+            "type": f"{stage}_model_{status}",
+            "stage": stage,
+            "model": model,
+            **event,
+        })
+
+    response = await query_model(model, messages, event_callback=on_model_event)
+    formatted = formatter(model, response)
+    event_type = f"{stage}_model_failed" if formatted.get("status") == "failed" else f"{stage}_model_complete"
+    await _emit_stage_event(event_callback, {
+        "type": event_type,
+        "stage": stage,
+        "model": model,
+        "status": formatted.get("status"),
+        "error_type": formatted.get("error_type"),
+        "error": formatted.get("error"),
+        "duration_seconds": formatted.get("duration_seconds"),
+        "first_event_seconds": formatted.get("first_event_seconds"),
+        "streamed": formatted.get("streamed"),
+    })
+    return index, formatted
+
+
+async def _query_stage_models_streaming(
+    *,
+    stage: str,
+    models: List[str],
+    messages: List[Dict[str, Any]],
+    formatter,
+    event_callback,
+) -> List[Dict[str, Any]]:
+    """Query stage models concurrently while emitting per-model progress."""
+    tasks = [
+        asyncio.create_task(_query_stage_model_with_events(
+            stage=stage,
+            index=index,
+            model=model,
+            messages=messages,
+            formatter=formatter,
+            event_callback=event_callback,
+        ))
+        for index, model in enumerate(models)
+    ]
+    results: List[Dict[str, Any] | None] = [None] * len(models)
+    for task in asyncio.as_completed(tasks):
+        index, formatted = await task
+        results[index] = formatted
+    return [result for result in results if result is not None]
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -26,17 +307,11 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
     council_models = get_council_models()
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results with full Response API metadata
-    stage1_results = []
-    for model, response in responses.items():
-        if response is not None:  # Only include successful responses
-            stage1_results.append({
-                "model": model,
-                "response": response.get('content', ''),
-                "response_id": response.get('id'),
-                "usage": response.get('usage', {}),
-                "finish_reason": response.get('finish_reason'),
-            })
+    # Format results with full Response API metadata and failure status.
+    stage1_results = [
+        _format_stage1_result(model, response)
+        for model, response in responses.items()
+    ]
 
     return stage1_results
 
@@ -56,18 +331,19 @@ async def stage2_collect_rankings(
         Tuple of (rankings list, label_to_model mapping)
     """
     # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
+    rankable_stage1_results = _successful_stage1_results(stage1_results)
+    labels = [chr(65 + i) for i in range(len(rankable_stage1_results))]  # A, B, C, ...
 
     # Create mapping from label to model name
     label_to_model = {
         f"Response {label}": result['model']
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, rankable_stage1_results)
     }
 
     # Build the ranking prompt
     responses_text = "\n\n".join([
         f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, rankable_stage1_results)
     ])
 
     ranking_prompt = f"""You are evaluating different responses to the following question:
@@ -107,20 +383,11 @@ Now provide your evaluation and ranking:"""
     council_models = get_council_models()
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results with full Response API metadata
-    stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            full_text = response.get('content', '')
-            parsed = parse_ranking_from_text(full_text)
-            stage2_results.append({
-                "model": model,
-                "ranking": full_text,
-                "parsed_ranking": parsed,
-                "response_id": response.get('id'),
-                "usage": response.get('usage', {}),
-                "finish_reason": response.get('finish_reason'),
-            })
+    # Format results with full Response API metadata and failure status.
+    stage2_results = [
+        _format_stage2_result(model, response)
+        for model, response in responses.items()
+    ]
 
     return stage2_results, label_to_model
 
@@ -144,12 +411,12 @@ async def stage3_synthesize_final(
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
         f"Model: {result['model']}\nResponse: {result['response']}"
-        for result in stage1_results
+        for result in _successful_stage1_results(stage1_results)
     ])
 
     stage2_text = "\n\n".join([
         f"Model: {result['model']}\nRanking: {result['ranking']}"
-        for result in stage2_results
+        for result in _successful_stage2_results(stage2_results)
     ])
 
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
@@ -175,20 +442,27 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     chairman_model = model_name("chairman_model")
     response = await query_model(chairman_model, messages)
 
-    if response is None:
+    if not response or response.get("status") == "failed":
         # Fallback if chairman fails
         return {
             "model": chairman_model,
-            "response": "Error: Unable to generate final synthesis."
+            "status": "failed",
+            "response": "Error: Unable to generate final synthesis.",
+            "error_type": response.get("error_type") if response else "no_response",
+            "error": response.get("error") if response else "No response returned from model call",
         }
 
     # Return with full Response API metadata
     return {
         "model": chairman_model,
+        "status": "success",
         "response": response.get('content', ''),
         "response_id": response.get('id'),
         "usage": response.get('usage', {}),
         "finish_reason": response.get('finish_reason'),
+        "duration_seconds": response.get("duration_seconds"),
+        "first_event_seconds": response.get("first_event_seconds"),
+        "streamed": bool(response.get("streamed")),
     }
 
 
@@ -245,7 +519,7 @@ def calculate_aggregate_rankings(
     # Track positions for each model
     model_positions = defaultdict(list)
 
-    for ranking in stage2_results:
+    for ranking in _successful_stage2_results(stage2_results):
         ranking_text = ranking['ranking']
 
         # Parse the ranking from the structured format
@@ -339,12 +613,12 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     # Stage 1: Collect individual responses
     stage1_results = await stage1_collect_responses(user_query)
 
-    # If no models responded successfully, return error
-    if not stage1_results:
-        return [], [], {
+    # If no models responded successfully, return error while preserving failures.
+    if not has_successful_stage1_results(stage1_results):
+        return stage1_results, [], {
             "model": "error",
             "response": "All models failed to respond. Please try again."
-        }, {}
+        }, {"warnings": _metadata_warnings(stage1_results)}
 
     # Stage 2: Collect rankings
     stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
@@ -362,7 +636,8 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     # Prepare metadata
     metadata = {
         "label_to_model": label_to_model,
-        "aggregate_rankings": aggregate_rankings
+        "aggregate_rankings": aggregate_rankings,
+        "warnings": _metadata_warnings(stage1_results, stage2_results),
     }
 
     return stage1_results, stage2_results, stage3_result, metadata
@@ -382,57 +657,37 @@ async def stage1_collect_responses_with_history(
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    # Build messages with conversation context
-    messages = []
-
-    if conversation_history:
-        # Add conversation context
-        context_text = "Previous conversation context:\n\n"
-        for msg in conversation_history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            # Extract text from content if it's an array
-            content = msg.get('content', '')
-            if isinstance(content, list):
-                # For multimodal content, extract text parts
-                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
-                content_text = ' '.join(text_parts)
-            else:
-                content_text = content
-            context_text += f"{role}: {content_text}\n\n"
-
-        # Handle user_query based on type
-        if isinstance(user_query, str):
-            context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
-            messages.append({"role": "user", "content": context_text})
-        else:
-            # Multimodal content array
-            # Prepend context as first text item
-            context_item = {"type": "text", "text": f"{context_text}\n\n"}
-            messages.append({"role": "user", "content": [context_item, *user_query]})
-    else:
-        # No conversation history
-        if isinstance(user_query, str):
-            messages = [{"role": "user", "content": user_query}]
-        else:
-            messages = [{"role": "user", "content": user_query}]
+    messages = _build_stage1_messages(user_query, conversation_history)
 
     # Query all models in parallel
     council_models = get_council_models()
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results with full Response API metadata
-    stage1_results = []
-    for model, response in responses.items():
-        if response is not None:  # Only include successful responses
-            stage1_results.append({
-                "model": model,
-                "response": response.get('content', ''),
-                "response_id": response.get('id'),
-                "usage": response.get('usage', {}),
-                "finish_reason": response.get('finish_reason'),
-            })
+    # Format results with full Response API metadata and failure status.
+    stage1_results = [
+        _format_stage1_result(model, response)
+        for model, response in responses.items()
+    ]
 
     return stage1_results
+
+
+async def stage1_collect_responses_streaming(
+    user_query: Union[str, List[Dict[str, Any]]],
+    conversation_history: List[Dict[str, Any]] = None,
+    council_models: List[str] | None = None,
+    event_callback=None,
+) -> List[Dict[str, Any]]:
+    """Stage 1 with per-model status events for SSE callers."""
+    messages = _build_stage1_messages(user_query, conversation_history)
+    models = council_models or get_council_models()
+    return await _query_stage_models_streaming(
+        stage="stage1",
+        models=models,
+        messages=messages,
+        formatter=_format_stage1_result,
+        event_callback=event_callback,
+    )
 
 
 async def stage2_collect_rankings_with_history(
@@ -451,90 +706,38 @@ async def stage2_collect_rankings_with_history(
     Returns:
         Tuple of (rankings list, label_to_model mapping)
     """
-    # Create anonymized labels for responses (Response A, Response B, etc.)
-    labels = [chr(65 + i) for i in range(len(stage1_results))]  # A, B, C, ...
-    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, stage1_results)}
-
-    # Extract text from user_query if it's multimodal
-    if isinstance(user_query, str):
-        query_text = user_query
-    else:
-        # Extract text parts from multimodal content
-        text_parts = [q.get('text', '') for q in user_query if q.get('type') == 'text']
-        query_text = ' '.join(text_parts)
-
-    # Build the ranking prompt with conversation context
-    prompt_parts = []
-
-    if conversation_history:
-        prompt_parts.append("Previous conversation context:")
-        for msg in conversation_history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            # Extract text from multimodal content
-            content = msg.get('content', '')
-            if isinstance(content, list):
-                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
-                content_text = ' '.join(text_parts)
-            else:
-                content_text = content
-            prompt_parts.append(f"{role}: {content_text}")
-        prompt_parts.append("")
-
-    prompt_parts.extend([
-        f"Current question: {query_text}",
-        "",
-        "Here are the anonymized responses from the council members:",
-        ""
-    ])
-
-    # Add anonymized responses
-    for label, result in zip(labels, stage1_results):
-        prompt_parts.append(f"**Response {label}:**")
-        prompt_parts.append(result["response"])
-        prompt_parts.append("")
-
-    # Add evaluation instructions
-    prompt_parts.extend([
-        "Please evaluate each response based on:",
-        "1. Accuracy and factual correctness",
-        "2. Insightfulness and depth",
-        "3. Clarity and coherence",
-        "4. Relevance to the question and conversation context",
-        "",
-        "Consider the conversation context when evaluating responses.",
-        "",
-        "After evaluating each response, please provide a final ranking from best to worst.",
-        "",
-        "**FINAL RANKING:**",
-        "1. Response X (best)",
-        "2. Response Y",
-        "3. Response Z",
-        "... (worst)",
-        "",
-        "Do not include any text after the ranking section."
-    ])
-
-    # Join all parts into the final prompt
-    messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
+    messages, label_to_model = _build_stage2_messages(user_query, stage1_results, conversation_history)
 
     # Query all models in parallel
     council_models = get_council_models()
     responses = await query_models_parallel(council_models, messages)
 
-    # Format results with full Response API metadata
-    stage2_results = []
-    for model, response in responses.items():
-        if response is not None:
-            parsed_ranking = parse_ranking_from_text(response.get('content', ''))
-            stage2_results.append({
-                "model": model,
-                "ranking": response.get('content', ''),
-                "parsed_ranking": parsed_ranking,
-                "response_id": response.get('id'),
-                "usage": response.get('usage', {}),
-                "finish_reason": response.get('finish_reason'),
-            })
+    # Format results with full Response API metadata and failure status.
+    stage2_results = [
+        _format_stage2_result(model, response)
+        for model, response in responses.items()
+    ]
 
+    return stage2_results, label_to_model
+
+
+async def stage2_collect_rankings_streaming(
+    user_query: Union[str, List[Dict[str, Any]]],
+    stage1_results: List[Dict[str, Any]],
+    conversation_history: List[Dict[str, Any]] = None,
+    council_models: List[str] | None = None,
+    event_callback=None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Stage 2 with per-model status events for SSE callers."""
+    messages, label_to_model = _build_stage2_messages(user_query, stage1_results, conversation_history)
+    models = council_models or get_council_models()
+    stage2_results = await _query_stage_models_streaming(
+        stage="stage2",
+        models=models,
+        messages=messages,
+        formatter=_format_stage2_result,
+        event_callback=event_callback,
+    )
     return stage2_results, label_to_model
 
 
@@ -600,7 +803,7 @@ async def stage3_synthesize_final_with_history(
     ])
 
     # Add individual model responses with attribution
-    for result in stage1_results:
+    for result in _successful_stage1_results(stage1_results):
         prompt_parts.append(f"**{result['model']}:**")
         prompt_parts.append(result['response'])
         prompt_parts.append("")
@@ -610,7 +813,7 @@ async def stage3_synthesize_final_with_history(
     ])
 
     # Add peer rankings
-    for result in stage2_results:
+    for result in _successful_stage2_results(stage2_results):
         prompt_parts.append(f"**{result['model']}:**")
         prompt_parts.append(result['ranking'])
         prompt_parts.append("")
@@ -644,18 +847,25 @@ async def stage3_synthesize_final_with_history(
     response = await query_model(chairman_model, messages)
 
     # Return with full Response API metadata
-    if response:
+    if response and response.get("status") != "failed":
         return {
             "model": chairman_model,
+            "status": "success",
             "response": response.get('content', ''),
             "response_id": response.get('id'),
             "usage": response.get('usage', {}),
             "finish_reason": response.get('finish_reason'),
+            "duration_seconds": response.get("duration_seconds"),
+            "first_event_seconds": response.get("first_event_seconds"),
+            "streamed": bool(response.get("streamed")),
         }
     else:
         return {
             "model": chairman_model,
-            "response": "Error: Unable to generate final synthesis."
+            "status": "failed",
+            "response": "Error: Unable to generate final synthesis.",
+            "error_type": response.get("error_type") if response else "no_response",
+            "error": response.get("error") if response else "No response returned from model call",
         }
 
 
@@ -676,12 +886,12 @@ async def run_full_council_with_history(
     # Stage 1: Collect individual responses with history context
     stage1_results = await stage1_collect_responses_with_history(user_query, conversation_history)
 
-    # If no models responded successfully, return error
-    if not stage1_results:
-        return [], [], {
+    # If no models responded successfully, return error while preserving failures.
+    if not has_successful_stage1_results(stage1_results):
+        return stage1_results, [], {
             "model": "error",
             "response": "All models failed to respond. Please try again."
-        }, {}
+        }, {"warnings": _metadata_warnings(stage1_results)}
 
     # Stage 2: Collect rankings with history context
     stage2_results, label_to_model = await stage2_collect_rankings_with_history(
@@ -699,7 +909,8 @@ async def run_full_council_with_history(
     # Prepare metadata
     metadata = {
         "label_to_model": label_to_model,
-        "aggregate_rankings": aggregate_rankings
+        "aggregate_rankings": aggregate_rankings,
+        "warnings": _metadata_warnings(stage1_results, stage2_results),
     }
 
     return stage1_results, stage2_results, stage3_result, metadata

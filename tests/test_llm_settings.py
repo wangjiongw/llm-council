@@ -52,6 +52,52 @@ class LLMSettingsTest(unittest.TestCase):
         self.assertEqual(default_config["chat_url"], "https://default.example/v1/chat/completions")
         self.assertEqual(override_config["chat_url"], "https://override.example/v1/chat/completions")
 
+    def test_llm_settings_test_endpoint_calls_model(self):
+        with patch(
+            "backend.main.query_model",
+            new=AsyncMock(return_value={
+                "status": "success",
+                "model": "test-model",
+                "content": "ok",
+                "usage": {"total_tokens": 1},
+            }),
+        ) as query_mock:
+            response = self.client.post(
+                "/api/settings/llm/test",
+                json={"model": "test-model"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["model"], "test-model")
+        self.assertEqual(payload["content"], "ok")
+        query_mock.assert_awaited_once()
+
+    def test_empty_fallback_lists_use_implicit_nano_without_publicly_configuring_it(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "quick_fallback_models": [],
+            "title_fallback_models": [],
+            "summarization_fallback_models": [],
+        })
+
+        public_settings = llm_settings.public_llm_settings()
+        self.assertEqual(public_settings["quick_fallback_models"], [])
+        self.assertEqual(public_settings["title_fallback_models"], [])
+        self.assertEqual(public_settings["summarization_fallback_models"], [])
+        self.assertEqual(llm_settings.model_list("quick_fallback_models"), ["gpt-5-nano"])
+        self.assertEqual(llm_settings.model_list("title_fallback_models"), ["gpt-5-nano"])
+        self.assertEqual(llm_settings.model_list("summarization_fallback_models"), ["gpt-5-nano"])
+
+    def test_configured_fallback_list_overrides_implicit_nano(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "quick_fallback_models": ["custom-fallback"],
+        })
+
+        self.assertEqual(llm_settings.model_list("quick_fallback_models"), ["custom-fallback"])
+
     def test_quick_query_uses_fallback_after_primary_failure(self):
         llm_settings.save_llm_settings({
             **llm_settings.DEFAULT_SETTINGS,
