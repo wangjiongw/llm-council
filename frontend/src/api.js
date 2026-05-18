@@ -25,6 +25,22 @@ function normalizeAbortError(error) {
   throw error;
 }
 
+export function parseSSEBlock(block) {
+  const dataLines = [];
+
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return JSON.parse(dataLines.join('\n'));
+}
+
 export const api = {
   /**
    * List all conversations.
@@ -336,30 +352,42 @@ export const api = {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
+
+    const processBuffer = (flush = false) => {
+      const normalized = buffer.replace(/\r\n/g, '\n');
+      const blocks = normalized.split('\n\n');
+      buffer = flush ? '' : blocks.pop();
+      const completeBlocks = flush ? blocks.filter(Boolean) : blocks;
+
+      for (const block of completeBlocks) {
+        if (!block.trim()) continue;
+        try {
+          const event = parseSSEBlock(block);
+          if (event) {
+            onEvent(event.type, event);
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e);
+        }
+      }
+    };
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          buffer += decoder.decode();
+          processBuffer(true);
+          break;
+        }
 
         if (controller.signal.aborted) {
           throw new Error('Query stopped by user');
         }
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            try {
-              const event = JSON.parse(data);
-              onEvent(event.type, event);
-            } catch (e) {
-              console.error('Failed to parse SSE event:', e);
-            }
-          }
-        }
+        buffer += decoder.decode(value, { stream: true });
+        processBuffer();
       }
     } catch (error) {
       if (error.name === 'AbortError' || error.message === 'Query stopped by user') {

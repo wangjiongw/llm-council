@@ -75,6 +75,34 @@
   margin-left: 8px;
 }
 
+.assistant-status-banner {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d8dee4;
+  background: #f6f8fa;
+  color: #57606a;
+  font-size: 13px;
+}
+
+.assistant-status-banner.interrupted {
+  border-color: #f0b8bd;
+  background: #fff5f5;
+  color: #7d0c16;
+}
+
+.assistant-status-banner.failed {
+  border-color: #f0b8bd;
+  background: #ffebe9;
+  color: #7d0c16;
+}
+
+.assistant-status-banner.running {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .turn-indicator {
   display: flex;
   align-items: center;

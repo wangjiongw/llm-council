@@ -261,7 +261,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         conversation_id,
         stage1_results,
         stage2_results,
-        stage3_result
+        stage3_result,
+        metadata=metadata,
     )
 
     # Return the complete response with metadata
@@ -312,7 +313,8 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
         conversation_id,
         [],  # No stage1
         [],  # No stage2
-        quick_result  # Store in stage3
+        quick_result,  # Store in stage3
+        metadata=quick_result.get("metadata"),
     )
 
     # Return the quick response
@@ -370,6 +372,31 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Add user message after building history so the current question is not duplicated
             storage.add_user_message(conversation_id, request.content)
+            assistant_message_index = storage.create_assistant_partial(conversation_id)
+
+            def persist_assistant(updates: Dict[str, Any]) -> None:
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    updates,
+                )
+
+            async def enqueue_and_persist_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await enqueue_model_event(queue, event)
+                stage = event.get("stage")
+                model = event.get("model")
+                if stage and model:
+                    persist_assistant({
+                        "modelStatus": {
+                            stage: {
+                                model: {
+                                    key: value
+                                    for key, value in event.items()
+                                    if value is not None
+                                }
+                            }
+                        }
+                    })
 
             # Start title generation in parallel (don't await yet)
             title_task = None
@@ -377,16 +404,21 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
             # Stage 1: Collect responses with history context
+            persist_assistant({"status": "running", "loading": {"stage1": True}})
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             stage1_queue: asyncio.Queue = asyncio.Queue()
             stage1_task = asyncio.create_task(stage1_collect_responses_streaming(
                 request.content,
                 conversation_history,
-                event_callback=lambda event: enqueue_model_event(stage1_queue, event),
+                event_callback=lambda event: enqueue_and_persist_model_event(stage1_queue, event),
             ))
             async for event_chunk in drain_model_events(stage1_task, stage1_queue):
                 yield event_chunk
             stage1_results = await stage1_task
+            persist_assistant({
+                "stage1": stage1_results,
+                "loading": {"stage1": False},
+            })
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             if not has_successful_stage1_results(stage1_results):
@@ -403,6 +435,17 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     "error_type": "all_stage1_models_failed",
                     "error": "No Stage 1 model returned a usable response.",
                 }
+                persist_assistant({
+                    "status": "complete",
+                    "stage2": stage2_results,
+                    "stage3": stage3_result,
+                    "metadata": metadata,
+                    "loading": {
+                        "stage1": False,
+                        "stage2": False,
+                        "stage3": False,
+                    },
+                })
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -411,33 +454,53 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     storage.update_conversation_title(conversation_id, title)
                     yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-                storage.add_assistant_message(
-                    conversation_id,
-                    stage1_results,
-                    stage2_results,
-                    stage3_result
-                )
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
                 return
 
             # Stage 2: Collect rankings with history context
+            persist_assistant({"loading": {"stage2": True}})
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
             stage2_queue: asyncio.Queue = asyncio.Queue()
             stage2_task = asyncio.create_task(stage2_collect_rankings_streaming(
                 request.content,
                 stage1_results,
                 conversation_history,
-                event_callback=lambda event: enqueue_model_event(stage2_queue, event),
+                event_callback=lambda event: enqueue_and_persist_model_event(stage2_queue, event),
             ))
             async for event_chunk in drain_model_events(stage2_task, stage2_queue):
                 yield event_chunk
             stage2_results, label_to_model = await stage2_task
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            metadata = {
+                "label_to_model": label_to_model,
+                "aggregate_rankings": aggregate_rankings,
+            }
+            persist_assistant({
+                "stage2": stage2_results,
+                "metadata": metadata,
+                "loading": {"stage2": False},
+            })
+            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
 
             # Stage 3: Synthesize final answer with history context
+            persist_assistant({"loading": {"stage3": True}})
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final_with_history(request.content, stage1_results, stage2_results, conversation_history)
+            stage3_queue: asyncio.Queue = asyncio.Queue()
+            stage3_task = asyncio.create_task(stage3_synthesize_final_with_history(
+                request.content,
+                stage1_results,
+                stage2_results,
+                conversation_history,
+                event_callback=lambda event: enqueue_and_persist_model_event(stage3_queue, event),
+            ))
+            async for event_chunk in drain_model_events(stage3_task, stage3_queue):
+                yield event_chunk
+            stage3_result = await stage3_task
+            persist_assistant({
+                "status": "complete",
+                "stage3": stage3_result,
+                "loading": {"stage3": False},
+            })
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -446,18 +509,40 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 storage.update_conversation_title(conversation_id, title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-            # Save complete assistant message
-            storage.add_assistant_message(
-                conversation_id,
-                stage1_results,
-                stage2_results,
-                stage3_result
-            )
-
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
+        except asyncio.CancelledError:
+            if "assistant_message_index" in locals():
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    {
+                        "status": "interrupted",
+                        "error": "Client disconnected before the council run completed.",
+                        "loading": {
+                            "stage1": False,
+                            "stage2": False,
+                            "stage3": False,
+                        },
+                    },
+                )
+            raise
         except Exception as e:
+            if "assistant_message_index" in locals():
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    {
+                        "status": "failed",
+                        "error": str(e),
+                        "loading": {
+                            "stage1": False,
+                            "stage2": False,
+                            "stage3": False,
+                        },
+                    },
+                )
             # Send error event
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
@@ -557,7 +642,8 @@ async def send_message_with_files(
             conversation_id,
             stage1_results,
             stage2_results,
-            stage3_result
+            stage3_result,
+            metadata=metadata,
         )
 
         if is_first_message:

@@ -372,6 +372,7 @@ function App() {
           modelStatus: {
             stage1: {},
             stage2: {},
+            stage3: {},
           },
           loading: {
             stage1: false,
@@ -388,7 +389,11 @@ function App() {
 
         // Use streaming endpoint for text-only messages
         await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
-        if (eventType.startsWith('stage1_model_') || eventType.startsWith('stage2_model_')) {
+        if (
+          eventType.startsWith('stage1_model_') ||
+          eventType.startsWith('stage2_model_') ||
+          eventType.startsWith('stage3_model_')
+        ) {
           applyModelStatusEvent(event);
           return;
         }

@@ -148,7 +148,8 @@ def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
 ):
     """
     Add an assistant message with all 3 stages to a conversation.
@@ -163,14 +164,102 @@ def add_assistant_message(
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
+    message = {
         "role": "assistant",
+        "status": "complete",
         "stage1": stage1,
         "stage2": stage2,
-        "stage3": stage3
-    })
+        "stage3": stage3,
+        "loading": {
+            "stage1": False,
+            "stage2": False,
+            "stage3": False,
+        },
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if metadata is not None:
+        message["metadata"] = metadata
+
+    conversation["messages"].append(message)
 
     save_conversation(conversation)
+
+
+def create_assistant_partial(conversation_id: str) -> int:
+    """
+    Add a persisted in-progress assistant placeholder.
+
+    Returns:
+        The message index for subsequent partial updates.
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    message = {
+        "role": "assistant",
+        "status": "running",
+        "stage1": None,
+        "stage2": None,
+        "stage3": None,
+        "metadata": None,
+        "modelStatus": {
+            "stage1": {},
+            "stage2": {},
+            "stage3": {},
+        },
+        "loading": {
+            "stage1": False,
+            "stage2": False,
+            "stage3": False,
+        },
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    conversation["messages"].append(message)
+    message_index = len(conversation["messages"]) - 1
+    save_conversation(conversation)
+    return message_index
+
+
+def update_assistant_partial(
+    conversation_id: str,
+    message_index: int,
+    updates: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Update a persisted assistant placeholder with partial stage state.
+
+    Dict fields such as loading/modelStatus are shallow-merged so callers can
+    update one stage without erasing the others.
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    messages = conversation.get("messages", [])
+    if message_index < 0 or message_index >= len(messages):
+        raise ValueError(f"Assistant message index {message_index} not found")
+
+    message = messages[message_index]
+    if message.get("role") != "assistant":
+        raise ValueError(f"Message at index {message_index} is not an assistant message")
+
+    for key, value in updates.items():
+        if key in {"loading", "modelStatus"} and isinstance(value, dict):
+            current = message.get(key) or {}
+            merged = dict(current)
+            for subkey, subvalue in value.items():
+                if isinstance(subvalue, dict) and isinstance(merged.get(subkey), dict):
+                    merged[subkey] = {**merged[subkey], **subvalue}
+                else:
+                    merged[subkey] = subvalue
+            message[key] = merged
+        else:
+            message[key] = value
+
+    message["updated_at"] = datetime.utcnow().isoformat()
+    save_conversation(conversation)
+    return message
 
 
 def update_conversation_title(conversation_id: str, title: str):
@@ -227,10 +316,11 @@ def get_conversation_history(
             # Check if next message is an assistant with stage3
             if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant":
                 assistant_msg = messages[i + 1]
-                if "stage3" in assistant_msg and "response" in assistant_msg["stage3"]:
+                stage3 = assistant_msg.get("stage3") or {}
+                if isinstance(stage3, dict) and "response" in stage3:
                     history_messages.append({
                         "role": "assistant",
-                        "content": assistant_msg["stage3"]["response"]
+                        "content": stage3["response"]
                     })
                     i += 1  # Skip the assistant message
 

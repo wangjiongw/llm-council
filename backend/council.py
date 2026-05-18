@@ -745,7 +745,8 @@ async def stage3_synthesize_final_with_history(
     user_query: Union[str, List[Dict[str, Any]]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    event_callback=None,
 ) -> Dict[str, Any]:
     """
     Stage 3 with conversation history context.
@@ -844,11 +845,27 @@ async def stage3_synthesize_final_with_history(
 
     # Query chairman model
     chairman_model = model_name("chairman_model")
-    response = await query_model(chairman_model, messages)
+    await _emit_stage_event(event_callback, {
+        "type": "stage3_model_start",
+        "stage": "stage3",
+        "model": chairman_model,
+        "status": "started",
+    })
+
+    async def on_model_event(event: Dict[str, Any]) -> None:
+        status = event.get("status", "running")
+        await _emit_stage_event(event_callback, {
+            "type": f"stage3_model_{status}",
+            "stage": "stage3",
+            "model": chairman_model,
+            **event,
+        })
+
+    response = await query_model(chairman_model, messages, event_callback=on_model_event)
 
     # Return with full Response API metadata
     if response and response.get("status") != "failed":
-        return {
+        result = {
             "model": chairman_model,
             "status": "success",
             "response": response.get('content', ''),
@@ -859,14 +876,40 @@ async def stage3_synthesize_final_with_history(
             "first_event_seconds": response.get("first_event_seconds"),
             "streamed": bool(response.get("streamed")),
         }
+        await _emit_stage_event(event_callback, {
+            "type": "stage3_model_complete",
+            "stage": "stage3",
+            "model": chairman_model,
+            "status": "success",
+            "duration_seconds": result.get("duration_seconds"),
+            "first_event_seconds": result.get("first_event_seconds"),
+            "streamed": result.get("streamed"),
+        })
+        return result
     else:
-        return {
+        result = {
             "model": chairman_model,
             "status": "failed",
             "response": "Error: Unable to generate final synthesis.",
             "error_type": response.get("error_type") if response else "no_response",
             "error": response.get("error") if response else "No response returned from model call",
         }
+        if response:
+            result["duration_seconds"] = response.get("duration_seconds")
+            result["first_event_seconds"] = response.get("first_event_seconds")
+            result["streamed"] = bool(response.get("streamed"))
+        await _emit_stage_event(event_callback, {
+            "type": "stage3_model_failed",
+            "stage": "stage3",
+            "model": chairman_model,
+            "status": "failed",
+            "error_type": result.get("error_type"),
+            "error": result.get("error"),
+            "duration_seconds": result.get("duration_seconds"),
+            "first_event_seconds": result.get("first_event_seconds"),
+            "streamed": result.get("streamed"),
+        })
+        return result
 
 
 async def run_full_council_with_history(

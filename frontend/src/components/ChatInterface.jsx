@@ -83,6 +83,15 @@ const MessageItem = memo(function MessageItem({
   isLastMessage,
 }) {
   const isUserMessage = msg.role === 'user';
+  const restoredStatusText = !isUserMessage && !isLoading && (
+    msg.status === 'interrupted'
+      ? 'This council run was interrupted. Completed stages were preserved.'
+      : msg.status === 'failed'
+        ? `This council run failed${msg.error ? `: ${msg.error}` : '.'}`
+        : msg.status === 'running'
+          ? 'This council run was in progress when the page loaded. If it does not continue, retry the query.'
+          : ''
+  );
 
   return (
     <div className="message-group">
@@ -147,6 +156,11 @@ const MessageItem = memo(function MessageItem({
               </span>
             )}
           </div>
+          {restoredStatusText && (
+            <div className={`assistant-status-banner ${msg.status}`}>
+              {restoredStatusText}
+            </div>
+          )}
 
           {/* Enhanced loading states with context awareness */}
           {msg.loading?.stage1 && (
@@ -195,14 +209,17 @@ const MessageItem = memo(function MessageItem({
           )}
 
           {msg.loading?.stage3 && (
-            <div className="stage-loading">
-              <div className="spinner"></div>
-              <span>
-                {hasPreviousTurns
-                  ? 'Running Stage 3: Final synthesis with full conversation context...'
-                  : 'Running Stage 3: Final synthesis...'
-                }
-              </span>
+            <div className="stage-loading-block">
+              <div className="stage-loading">
+                <div className="spinner"></div>
+                <span>
+                  {hasPreviousTurns
+                    ? 'Running Stage 3: Final synthesis with full conversation context...'
+                    : 'Running Stage 3: Final synthesis...'
+                  }
+                </span>
+              </div>
+              <ModelStatusList statuses={msg.modelStatus?.stage3} />
             </div>
           )}
           {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasPreviousTurns} />}
