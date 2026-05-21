@@ -249,7 +249,9 @@ def update_assistant_partial(
             current = message.get(key) or {}
             merged = dict(current)
             for subkey, subvalue in value.items():
-                if isinstance(subvalue, dict) and isinstance(merged.get(subkey), dict):
+                if key == "modelStatus" and subvalue == {}:
+                    merged[subkey] = {}
+                elif isinstance(subvalue, dict) and isinstance(merged.get(subkey), dict):
                     merged[subkey] = {**merged[subkey], **subvalue}
                 else:
                     merged[subkey] = subvalue
@@ -280,7 +282,8 @@ def update_conversation_title(conversation_id: str, title: str):
 
 def get_conversation_history(
     conversation_id: str,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    before_index: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extract conversation history for context building.
@@ -288,6 +291,7 @@ def get_conversation_history(
     Args:
         conversation_id: Conversation identifier
         limit: Maximum number of complete exchanges to extract
+        before_index: Optional message index to stop before
 
     Returns:
         List of conversation messages (user + assistant stage3 only)
@@ -298,6 +302,8 @@ def get_conversation_history(
 
     history_messages = []
     messages = conversation.get("messages", [])
+    if before_index is not None:
+        messages = messages[:before_index]
 
     # Extract complete exchanges (user + assistant stage3)
     i = 0

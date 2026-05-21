@@ -30,6 +30,16 @@ def has_successful_stage1_results(stage1_results: List[Dict[str, Any]]) -> bool:
     return bool(_successful_stage1_results(stage1_results))
 
 
+def build_label_to_model_from_stage1_results(stage1_results: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Rebuild Stage 2 anonymous labels from persisted usable Stage 1 records."""
+    rankable_stage1_results = _successful_stage1_results(stage1_results)
+    labels = [chr(65 + i) for i in range(len(rankable_stage1_results))]
+    return {
+        f"Response {label}": result["model"]
+        for label, result in zip(labels, rankable_stage1_results)
+    }
+
+
 def _successful_stage2_results(stage2_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Stage 2 records that can be used for synthesis and aggregation."""
     return [
@@ -37,6 +47,11 @@ def _successful_stage2_results(stage2_results: List[Dict[str, Any]]) -> List[Dic
         for result in stage2_results
         if _is_successful_result(result) and bool(result.get("ranking"))
     ]
+
+
+def has_successful_stage2_results(stage2_results: List[Dict[str, Any]]) -> bool:
+    """Return True when at least one Stage 2 ranking can be used downstream."""
+    return bool(_successful_stage2_results(stage2_results))
 
 
 def _format_stage_failure(model: str, response: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -174,8 +189,8 @@ def _build_stage2_messages(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Build Stage 2 messages and label mapping from successful Stage 1 records."""
     rankable_stage1_results = _successful_stage1_results(stage1_results)
-    labels = [chr(65 + i) for i in range(len(rankable_stage1_results))]
-    label_to_model = {f"Response {label}": result["model"] for label, result in zip(labels, rankable_stage1_results)}
+    label_to_model = build_label_to_model_from_stage1_results(stage1_results)
+    labels = [label.replace("Response ", "") for label in label_to_model]
     query_text = _query_text(user_query)
 
     prompt_parts = []

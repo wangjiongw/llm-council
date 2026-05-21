@@ -397,6 +397,7 @@
 }
 
 .retry-button,
+.continue-button,
 .edit-message-button {
   padding: 8px 16px;
   border-radius: 6px;
@@ -416,6 +417,12 @@
   color: #fff;
 }
 
+.continue-button {
+  background: #1677ff;
+  border: 1px solid #1677ff;
+  color: #fff;
+}
+
 .edit-message-button {
   background: #fff;
   border: 1px solid #d0d7de;
@@ -429,6 +436,13 @@
   box-shadow: 0 2px 8px rgba(114, 46, 209, 0.3);
 }
 
+.continue-button:hover {
+  background: #4096ff;
+  border-color: #4096ff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(22, 119, 255, 0.3);
+}
+
 .edit-message-button:hover {
   background: #f0f6ff;
   border-color: #4a90e2;
@@ -437,12 +451,14 @@
 }
 
 .retry-button:active,
+.continue-button:active,
 .edit-message-button:active {
   transform: translateY(0);
   box-shadow: 0 1px 4px rgba(114, 46, 209, 0.3);
 }
 
 .retry-button:focus,
+.continue-button:focus,
 .edit-message-button:focus {
   outline: none;
   box-shadow: 0 0 0 3px rgba(114, 46, 209, 0.2);

@@ -41,6 +41,47 @@ export function parseSSEBlock(block) {
   return JSON.parse(dataLines.join('\n'));
 }
 
+async function readSSEEvents(response, onEvent, controller) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const processBuffer = (flush = false) => {
+    const normalized = buffer.replace(/\r\n/g, '\n');
+    const blocks = normalized.split('\n\n');
+    buffer = flush ? '' : blocks.pop();
+    const completeBlocks = flush ? blocks.filter(Boolean) : blocks;
+
+    for (const block of completeBlocks) {
+      if (!block.trim()) continue;
+      try {
+        const event = parseSSEBlock(block);
+        if (event) {
+          onEvent(event.type, event);
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE event:', e);
+      }
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      buffer += decoder.decode();
+      processBuffer(true);
+      break;
+    }
+
+    if (controller.signal.aborted) {
+      throw new Error('Query stopped by user');
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    processBuffer();
+  }
+}
+
 export const api = {
   /**
    * List all conversations.
@@ -350,48 +391,52 @@ export const api = {
       throw new Error('Failed to send message');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    const processBuffer = (flush = false) => {
-      const normalized = buffer.replace(/\r\n/g, '\n');
-      const blocks = normalized.split('\n\n');
-      buffer = flush ? '' : blocks.pop();
-      const completeBlocks = flush ? blocks.filter(Boolean) : blocks;
-
-      for (const block of completeBlocks) {
-        if (!block.trim()) continue;
-        try {
-          const event = parseSSEBlock(block);
-          if (event) {
-            onEvent(event.type, event);
-          }
-        } catch (e) {
-          console.error('Failed to parse SSE event:', e);
-        }
-      }
-    };
-
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          buffer += decoder.decode();
-          processBuffer(true);
-          break;
-        }
-
-        if (controller.signal.aborted) {
-          throw new Error('Query stopped by user');
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        processBuffer();
-      }
+      await readSSEEvents(response, onEvent, controller);
     } catch (error) {
       if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
         console.log('Stream aborted by user');
+        throw new Error('Query stopped by user');
+      }
+      throw error;
+    } finally {
+      if (currentAbortController === controller) {
+        currentAbortController = null;
+      }
+    }
+  },
+
+  /**
+   * Resume a persisted partial council response from its earliest missing stage.
+   */
+  async resumeMessageStream(conversationId, messageIndex, onEvent, abortController = null) {
+    const controller = abortController || startAbortableRequest();
+    currentAbortController = controller;
+
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/messages/${messageIndex}/resume/stream`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      }
+    );
+
+    if (!response.ok) {
+      if (controller.signal.aborted) {
+        throw new Error('Query stopped by user');
+      }
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to resume message');
+    }
+
+    try {
+      await readSSEEvents(response, onEvent, controller);
+    } catch (error) {
+      if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
+        console.log('Resume stream aborted by user');
         throw new Error('Query stopped by user');
       }
       throw error;

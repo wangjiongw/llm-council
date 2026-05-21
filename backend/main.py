@@ -10,7 +10,7 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results
+from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results
 from .llm_settings import public_llm_settings, update_llm_settings
 from .openrouter import query_model
 
@@ -86,6 +86,51 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+
+
+def _find_preceding_user_message(
+    messages: List[Dict[str, Any]],
+    assistant_index: int,
+) -> tuple[int, Dict[str, Any]]:
+    """Find the user message that belongs to a persisted assistant response."""
+    if assistant_index < 0 or assistant_index >= len(messages):
+        raise ValueError("Assistant message index out of range")
+
+    assistant = messages[assistant_index]
+    if assistant.get("role") != "assistant":
+        raise ValueError("Selected message is not an assistant message")
+
+    for index in range(assistant_index - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index, messages[index]
+
+    raise ValueError("No preceding user message found for assistant response")
+
+
+def _stage3_is_complete(stage3: Any) -> bool:
+    """Return True when a persisted Stage 3 result is usable."""
+    return isinstance(stage3, dict) and stage3.get("status", "success") == "success" and bool(stage3.get("response"))
+
+
+def _metadata_has_label_mapping(metadata: Any) -> bool:
+    """Return True when Stage 2 metadata has the mapping needed by the UI."""
+    return (
+        isinstance(metadata, dict)
+        and isinstance(metadata.get("label_to_model"), dict)
+        and bool(metadata.get("label_to_model"))
+    )
+
+
+def _rebuild_stage2_metadata(
+    stage1_results: List[Dict[str, Any]],
+    stage2_results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Recreate Stage 2 metadata from persisted Stage 1/2 results."""
+    label_to_model = build_label_to_model_from_stage1_results(stage1_results)
+    return {
+        "label_to_model": label_to_model,
+        "aggregate_rankings": calculate_aggregate_rankings(stage2_results, label_to_model),
+    }
 
 
 @app.get("/")
@@ -544,6 +589,261 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     },
                 )
             # Send error event
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@app.post("/api/conversations/{conversation_id}/messages/{message_index}/resume/stream")
+async def resume_message_stream(conversation_id: str, message_index: int):
+    """
+    Resume a persisted partial council response from the earliest missing stage.
+
+    This reuses completed Stage 1/2 results when available and updates the same
+    assistant message in storage instead of appending a duplicate response.
+    """
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    try:
+        user_index, user_message = _find_preceding_user_message(
+            conversation.get("messages", []),
+            message_index,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    assistant_message = conversation["messages"][message_index]
+    if _stage3_is_complete(assistant_message.get("stage3")):
+        raise HTTPException(status_code=400, detail="Assistant response is already complete")
+
+    user_query = user_message.get("content", "")
+
+    async def event_generator():
+        try:
+            async def drain_model_events(task: asyncio.Task, queue: asyncio.Queue):
+                while not task.done():
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                while not queue.empty():
+                    event = queue.get_nowait()
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            async def enqueue_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await queue.put({
+                    key: value
+                    for key, value in event.items()
+                    if value is not None
+                })
+
+            def persist_assistant(updates: Dict[str, Any]) -> None:
+                storage.update_assistant_partial(conversation_id, message_index, updates)
+
+            async def enqueue_and_persist_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await enqueue_model_event(queue, event)
+                stage = event.get("stage")
+                model = event.get("model")
+                if stage and model:
+                    persist_assistant({
+                        "modelStatus": {
+                            stage: {
+                                model: {
+                                    key: value
+                                    for key, value in event.items()
+                                    if value is not None
+                                }
+                            }
+                        }
+                    })
+
+            raw_history = storage.get_conversation_history(conversation_id, before_index=user_index)
+            conversation_history = None
+            if raw_history:
+                conversation_history = await storage.build_conversation_context(
+                    raw_history,
+                    conversation_id=conversation_id,
+                )
+
+            current_conversation = storage.get_conversation(conversation_id)
+            assistant = current_conversation["messages"][message_index]
+            stage1_results = assistant.get("stage1")
+            stage2_results = assistant.get("stage2")
+
+            persist_assistant({
+                "status": "running",
+                "error": None,
+                "loading": {
+                    "stage1": False,
+                    "stage2": False,
+                    "stage3": False,
+                },
+            })
+
+            if not has_successful_stage1_results(stage1_results or []):
+                persist_assistant({
+                    "stage1": None,
+                    "stage2": None,
+                    "stage3": None,
+                    "metadata": None,
+                    "modelStatus": {
+                        "stage1": {},
+                        "stage2": {},
+                        "stage3": {},
+                    },
+                    "loading": {"stage1": True},
+                })
+                yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
+                stage1_queue: asyncio.Queue = asyncio.Queue()
+                stage1_task = asyncio.create_task(stage1_collect_responses_streaming(
+                    user_query,
+                    conversation_history,
+                    event_callback=lambda event: enqueue_and_persist_model_event(stage1_queue, event),
+                ))
+                async for event_chunk in drain_model_events(stage1_task, stage1_queue):
+                    yield event_chunk
+                stage1_results = await stage1_task
+                persist_assistant({
+                    "stage1": stage1_results,
+                    "loading": {"stage1": False},
+                })
+                yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
+
+            if not has_successful_stage1_results(stage1_results or []):
+                metadata = {
+                    "label_to_model": {},
+                    "aggregate_rankings": [],
+                    "warnings": ["All Stage 1 model calls failed."],
+                }
+                stage2_results = []
+                stage3_result = {
+                    "model": "error",
+                    "status": "failed",
+                    "response": "All models failed to respond. Please try again.",
+                    "error_type": "all_stage1_models_failed",
+                    "error": "No Stage 1 model returned a usable response.",
+                }
+                persist_assistant({
+                    "status": "complete",
+                    "stage2": stage2_results,
+                    "stage3": stage3_result,
+                    "metadata": metadata,
+                    "loading": {
+                        "stage1": False,
+                        "stage2": False,
+                        "stage3": False,
+                    },
+                })
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                return
+
+            if not has_successful_stage2_results(stage2_results or []):
+                persist_assistant({
+                    "stage2": None,
+                    "stage3": None,
+                    "metadata": None,
+                    "modelStatus": {
+                        "stage2": {},
+                        "stage3": {},
+                    },
+                    "loading": {"stage2": True},
+                })
+                yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+                stage2_queue: asyncio.Queue = asyncio.Queue()
+                stage2_task = asyncio.create_task(stage2_collect_rankings_streaming(
+                    user_query,
+                    stage1_results,
+                    conversation_history,
+                    event_callback=lambda event: enqueue_and_persist_model_event(stage2_queue, event),
+                ))
+                async for event_chunk in drain_model_events(stage2_task, stage2_queue):
+                    yield event_chunk
+                stage2_results, label_to_model = await stage2_task
+                aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+                metadata = {
+                    "label_to_model": label_to_model,
+                    "aggregate_rankings": aggregate_rankings,
+                }
+                persist_assistant({
+                    "stage2": stage2_results,
+                    "metadata": metadata,
+                    "loading": {"stage2": False},
+                })
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
+            else:
+                metadata = assistant.get("metadata") or {}
+                if not _metadata_has_label_mapping(metadata):
+                    metadata = _rebuild_stage2_metadata(stage1_results, stage2_results)
+                    persist_assistant({"metadata": metadata})
+
+            persist_assistant({
+                "stage3": None,
+                "modelStatus": {"stage3": {}},
+                "loading": {"stage3": True},
+            })
+            yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+            stage3_queue: asyncio.Queue = asyncio.Queue()
+            stage3_task = asyncio.create_task(stage3_synthesize_final_with_history(
+                user_query,
+                stage1_results,
+                stage2_results,
+                conversation_history,
+                event_callback=lambda event: enqueue_and_persist_model_event(stage3_queue, event),
+            ))
+            async for event_chunk in drain_model_events(stage3_task, stage3_queue):
+                yield event_chunk
+            stage3_result = await stage3_task
+            persist_assistant({
+                "status": "complete",
+                "stage3": stage3_result,
+                "metadata": metadata,
+                "loading": {"stage3": False},
+            })
+            yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+
+        except asyncio.CancelledError:
+            storage.update_assistant_partial(
+                conversation_id,
+                message_index,
+                {
+                    "status": "interrupted",
+                    "error": "Client disconnected before the council resume completed.",
+                    "loading": {
+                        "stage1": False,
+                        "stage2": False,
+                        "stage3": False,
+                    },
+                },
+            )
+            raise
+        except Exception as e:
+            storage.update_assistant_partial(
+                conversation_id,
+                message_index,
+                {
+                    "status": "failed",
+                    "error": str(e),
+                    "loading": {
+                        "stage1": False,
+                        "stage2": False,
+                        "stage3": False,
+                    },
+                },
+            )
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(

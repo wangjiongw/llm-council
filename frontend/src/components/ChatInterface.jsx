@@ -79,8 +79,10 @@ const MessageItem = memo(function MessageItem({
   conversationContext,
   isLoading,
   onRetryQuery,
+  onResumeQuery,
   onEditMessage,
   isLastMessage,
+  messageIndex,
 }) {
   const isUserMessage = msg.role === 'user';
   const restoredStatusText = !isUserMessage && !isLoading && (
@@ -92,6 +94,17 @@ const MessageItem = memo(function MessageItem({
           ? 'This council run was in progress when the page loaded. If it does not continue, retry the query.'
           : ''
   );
+  const canContinueSavedStages = !isUserMessage &&
+    isLastMessage &&
+    !isLoading &&
+    onResumeQuery &&
+    (
+      msg.status === 'interrupted' ||
+      msg.status === 'failed' ||
+      msg.status === 'running' ||
+      !msg.stage3 ||
+      msg.stage3?.status === 'failed'
+    );
 
   return (
     <div className="message-group">
@@ -224,16 +237,37 @@ const MessageItem = memo(function MessageItem({
           )}
           {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasPreviousTurns} />}
 
+          {canContinueSavedStages && (
+            <div className="message-actions">
+              <button
+                className="continue-button"
+                onClick={() => onResumeQuery(messageIndex)}
+                title="Continue from saved completed stages"
+                aria-label="Continue from saved stages"
+              >
+                ▶️ Continue
+              </button>
+              <button
+                className="retry-button"
+                onClick={onRetryQuery}
+                title="Retry this query from Stage 1"
+                aria-label="Retry from scratch"
+              >
+                🔄 Retry from scratch
+              </button>
+            </div>
+          )}
+
           {/* Retry button for completed assistant messages */}
-          {msg.stage3 && !isLoading && isLastMessage && (
+          {msg.stage3 && !canContinueSavedStages && !isLoading && isLastMessage && (
             <div className="message-actions">
               <button
                 className="retry-button"
                 onClick={onRetryQuery}
-                title="Retry this query for a different response"
-                aria-label="Retry this query"
+                title="Retry this query from Stage 1"
+                aria-label="Retry from scratch"
               >
-                🔄 Retry
+                🔄 Retry from scratch
               </button>
             </div>
           )}
@@ -249,6 +283,7 @@ export default function ChatInterface({
   onSendQuickMessage,
   onStopQuery,
   onRetryQuery,
+  onResumeQuery,
   isLoading,
   activeStreamId,
   attachedFiles,
@@ -529,8 +564,10 @@ export default function ChatInterface({
                   conversationContext={conversationContext}
                   isLoading={isLoading}
                   onRetryQuery={onRetryQuery}
+                  onResumeQuery={onResumeQuery}
                   onEditMessage={handleEditMessage}
                   isLastMessage={index === conversation.messages.length - 1}
+                  messageIndex={index}
                 />
               ))}
             </div>

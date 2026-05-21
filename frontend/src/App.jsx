@@ -213,20 +213,23 @@ function App() {
       });
     }
 
-    // Remove the optimistic messages for the in-flight turn.
-    setCurrentConversation((prev) => {
-      if (!prev?.messages) return prev;
-      const messages = [...prev.messages];
+    // Only brand-new turns have optimistic user/assistant messages to remove.
+    // Resumed turns operate on persisted history and must remain visible.
+    if (draft) {
+      setCurrentConversation((prev) => {
+        if (!prev?.messages) return prev;
+        const messages = [...prev.messages];
 
-      if (messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
-        messages.pop();
-      }
-      if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-        messages.pop();
-      }
+        if (messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
+          messages.pop();
+        }
+        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+          messages.pop();
+        }
 
-      return { ...prev, messages };
-    });
+        return { ...prev, messages };
+      });
+    }
   };
 
   const handleRetryLastQuery = () => {
@@ -267,12 +270,30 @@ function App() {
     handleSendMessage(lastUserMessage.content);
   };
 
-  const applyModelStatusEvent = (event) => {
+  const updateStreamingAssistant = (messageIndex, updater) => {
     setCurrentConversation((prev) => {
+      if (!prev?.messages) return prev;
       const messages = [...prev.messages];
-      const lastMsg = messages[messages.length - 1];
-      if (!lastMsg || lastMsg.role !== 'assistant' || !event.stage || !event.model) {
+      const assistantIndex = typeof messageIndex === 'number' ? messageIndex : messages.length - 1;
+      const lastMsg = messages[assistantIndex];
+      if (!lastMsg || lastMsg.role !== 'assistant') {
         return prev;
+      }
+
+      messages[assistantIndex] = {
+        ...lastMsg,
+        loading: { ...(lastMsg.loading || {}) },
+        modelStatus: { ...(lastMsg.modelStatus || {}) },
+      };
+      updater(messages[assistantIndex]);
+      return { ...prev, messages };
+    });
+  };
+
+  const applyModelStatusEvent = (event, messageIndex = null) => {
+    updateStreamingAssistant(messageIndex, (lastMsg) => {
+      if (!event.stage || !event.model) {
+        return;
       }
 
       const currentModelStatus = lastMsg.modelStatus || {};
@@ -293,8 +314,97 @@ function App() {
           },
         },
       };
-      return { ...prev, messages };
     });
+  };
+
+  const handleCouncilStreamEvent = (eventType, event, messageIndex = null) => {
+    if (
+      eventType.startsWith('stage1_model_') ||
+      eventType.startsWith('stage2_model_') ||
+      eventType.startsWith('stage3_model_')
+    ) {
+      applyModelStatusEvent(event, messageIndex);
+      return;
+    }
+
+    switch (eventType) {
+      case 'stage1_start':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'running';
+          lastMsg.error = null;
+          lastMsg.loading.stage1 = true;
+        });
+        break;
+
+      case 'stage1_complete':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.stage1 = event.data;
+          lastMsg.loading.stage1 = false;
+        });
+        break;
+
+      case 'stage2_start':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'running';
+          lastMsg.error = null;
+          lastMsg.loading.stage2 = true;
+        });
+        break;
+
+      case 'stage2_complete':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.stage2 = event.data;
+          lastMsg.metadata = event.metadata;
+          lastMsg.loading.stage2 = false;
+        });
+        break;
+
+      case 'stage3_start':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'running';
+          lastMsg.error = null;
+          lastMsg.loading.stage3 = true;
+        });
+        break;
+
+      case 'stage3_complete':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'complete';
+          lastMsg.stage3 = event.data;
+          lastMsg.loading.stage3 = false;
+        });
+        break;
+
+      case 'title_complete':
+        // Reload conversations to get updated title
+        loadConversations();
+        break;
+
+      case 'complete':
+        // Stream complete, reload conversations list
+        loadConversations();
+        setIsLoading(false);
+        setActiveStreamId(null);
+        setInFlightDraft(null);
+        break;
+
+      case 'error':
+        console.error('Stream error:', event.message);
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'failed';
+          lastMsg.error = event.message;
+          lastMsg.loading.stage1 = false;
+          lastMsg.loading.stage2 = false;
+          lastMsg.loading.stage3 = false;
+        });
+        setIsLoading(false);
+        setActiveStreamId(null);
+        setInFlightDraft(null);
+        break;
+
+      default:
+        console.log('Unknown event type:', eventType);
+    }
   };
 
   const handleSendMessage = async (content, files = attachedFiles) => {
@@ -389,98 +499,8 @@ function App() {
 
         // Use streaming endpoint for text-only messages
         await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
-        if (
-          eventType.startsWith('stage1_model_') ||
-          eventType.startsWith('stage2_model_') ||
-          eventType.startsWith('stage3_model_')
-        ) {
-          applyModelStatusEvent(event);
-          return;
-        }
-
-        switch (eventType) {
-          case 'stage1_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage1_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage2_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage2_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage3_start':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'stage3_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
-              lastMsg.loading.stage3 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'title_complete':
-            // Reload conversations to get updated title
-            loadConversations();
-            break;
-
-          case 'complete':
-            // Stream complete, reload conversations list
-            loadConversations();
-            setIsLoading(false);
-            setActiveStreamId(null);
-            setInFlightDraft(null);
-            break;
-
-          case 'error':
-            console.error('Stream error:', event.message);
-            setIsLoading(false);
-            setActiveStreamId(null);
-            setInFlightDraft(null);
-            break;
-
-          default:
-            console.log('Unknown event type:', eventType);
-        }
-      });
+          handleCouncilStreamEvent(eventType, event);
+        });
       }
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -496,6 +516,45 @@ function App() {
         ...prev,
         messages: prev.messages.slice(0, hasFiles ? -1 : -2),
       }));
+      setIsLoading(false);
+      setActiveStreamId(null);
+      setInFlightDraft(null);
+    }
+  };
+
+  const handleResumeSavedStages = async (messageIndex) => {
+    if (!currentConversationId || isLoading) return;
+
+    setIsLoading(true);
+    const requestId = `resume-${Date.now()}`;
+    setActiveStreamId(requestId);
+    setInFlightDraft(null);
+    setDraftToRestore(null);
+    updateStreamingAssistant(messageIndex, (lastMsg) => {
+      lastMsg.status = 'running';
+      lastMsg.error = null;
+      lastMsg.loading.stage1 = false;
+      lastMsg.loading.stage2 = false;
+      lastMsg.loading.stage3 = false;
+    });
+
+    try {
+      await api.resumeMessageStream(currentConversationId, messageIndex, (eventType, event) => {
+        handleCouncilStreamEvent(eventType, event, messageIndex);
+      });
+    } catch (error) {
+      console.error('Failed to resume saved council stages:', error);
+
+      if (error.message !== 'Query stopped by user') {
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'failed';
+          lastMsg.error = error.message;
+          lastMsg.loading.stage1 = false;
+          lastMsg.loading.stage2 = false;
+          lastMsg.loading.stage3 = false;
+        });
+      }
+    } finally {
       setIsLoading(false);
       setActiveStreamId(null);
       setInFlightDraft(null);
@@ -616,6 +675,7 @@ function App() {
         onSendQuickMessage={handleSendQuickMessage}
         onStopQuery={handleStopQuery}
         onRetryQuery={handleRetryLastQuery}
+        onResumeQuery={handleResumeSavedStages}
         isLoading={isLoading}
         activeStreamId={activeStreamId}
         attachedFiles={attachedFiles}

@@ -119,6 +119,11 @@ async def _query_model_streaming(
             headers=headers,
             json=payload,
         ) as response:
+            if response.is_error:
+                # Streaming responses do not expose .text until the body is read.
+                # Read error bodies eagerly so HTTPStatusError handling can persist
+                # provider diagnostics instead of raising httpx.ResponseNotRead.
+                await response.aread()
             response.raise_for_status()
 
             line_iter = response.aiter_lines().__aiter__()
@@ -270,7 +275,13 @@ async def query_model(
     except httpx.HTTPStatusError as e:
         duration = time.perf_counter() - start
         status_code = e.response.status_code if e.response is not None else None
-        response_text = e.response.text[:500] if e.response is not None else str(e)
+        if e.response is not None:
+            try:
+                response_text = e.response.text[:500]
+            except httpx.ResponseNotRead:
+                response_text = str(e)[:500]
+        else:
+            response_text = str(e)[:500]
         logger.exception(
             "LLM request HTTP error for model %s after %.3fs (status=%s)",
             model,
