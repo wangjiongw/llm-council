@@ -253,6 +253,7 @@ function App() {
 
     // Remove the last assistant message (if it exists)
     const lastMessage = messages[messages.length - 1];
+    const retryQuick = lastMessage?.role === 'assistant' && lastMessage.metadata?.mode === 'quick';
     let updatedMessages = [...messages];
 
     if (lastMessage && lastMessage.role === 'assistant') {
@@ -266,8 +267,12 @@ function App() {
       messages: updatedMessages
     }));
 
-    // Send the last user message again
-    handleSendMessage(lastUserMessage.content);
+    // Send the last user message again using the same mode.
+    if (retryQuick) {
+      handleSendQuickMessage(lastUserMessage.content);
+    } else {
+      handleSendMessage(lastUserMessage.content);
+    }
   };
 
   const updateStreamingAssistant = (messageIndex, updater) => {
@@ -321,7 +326,8 @@ function App() {
     if (
       eventType.startsWith('stage1_model_') ||
       eventType.startsWith('stage2_model_') ||
-      eventType.startsWith('stage3_model_')
+      eventType.startsWith('stage3_model_') ||
+      eventType.startsWith('quick_model_')
     ) {
       applyModelStatusEvent(event, messageIndex);
       return;
@@ -364,6 +370,28 @@ function App() {
           lastMsg.status = 'running';
           lastMsg.error = null;
           lastMsg.loading.stage3 = true;
+        });
+        break;
+
+      case 'quick_start':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'running';
+          lastMsg.error = null;
+          lastMsg.metadata = { ...(lastMsg.metadata || {}), mode: 'quick' };
+          lastMsg.loading.stage1 = false;
+          lastMsg.loading.stage2 = false;
+          lastMsg.loading.stage3 = true;
+        });
+        break;
+
+      case 'quick_complete':
+        updateStreamingAssistant(messageIndex, (lastMsg) => {
+          lastMsg.status = 'complete';
+          lastMsg.stage1 = [];
+          lastMsg.stage2 = [];
+          lastMsg.stage3 = event.data;
+          lastMsg.metadata = event.metadata || { mode: 'quick' };
+          lastMsg.loading.stage3 = false;
         });
         break;
 
@@ -618,23 +646,34 @@ function App() {
         // the message; the pending queue is cleared after success.
         setAttachedFiles(response.file_queue || []);
       } else {
-        // No files, use quick endpoint
-        const response = await api.sendQuickMessage(currentConversationId, content);
+        const assistantMessage = {
+          role: 'assistant',
+          status: 'running',
+          stage1: [],
+          stage2: [],
+          stage3: null,
+          metadata: { mode: 'quick' },
+          modelStatus: {
+            stage1: {},
+            stage2: {},
+            stage3: {},
+          },
+          loading: {
+            stage1: false,
+            stage2: false,
+            stage3: true,
+          },
+        };
 
-        // Add assistant response (quick format)
         setCurrentConversation((prev) => ({
           ...prev,
-          messages: [
-            ...prev.messages,
-            {
-              role: 'assistant',
-              stage1: null,
-              stage2: null,
-              stage3: response.quick,
-              metadata: null,
-            },
-          ],
+          messages: [...prev.messages, assistantMessage],
         }));
+
+        // No files, use quick streaming endpoint
+        await api.sendQuickMessageStream(currentConversationId, content, (eventType, event) => {
+          handleCouncilStreamEvent(eventType, event);
+        });
       }
 
       // Reload conversations list
@@ -646,11 +685,31 @@ function App() {
         return;
       }
 
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -1),
-      }));
+      if (files.length > 0) {
+        // File quick submissions currently use the non-streaming file endpoint.
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: prev.messages.slice(0, -1),
+        }));
+      } else {
+        updateStreamingAssistant(null, (lastMsg) => {
+          lastMsg.status = 'failed';
+          lastMsg.error = error.message;
+          lastMsg.stage1 = [];
+          lastMsg.stage2 = [];
+          lastMsg.stage3 = {
+            model: 'quick',
+            status: 'failed',
+            response: `Error: ${error.message}`,
+            error_type: 'quick_stream_error',
+            error: error.message,
+          };
+          lastMsg.metadata = { ...(lastMsg.metadata || {}), mode: 'quick' };
+          lastMsg.loading.stage1 = false;
+          lastMsg.loading.stage2 = false;
+          lastMsg.loading.stage3 = false;
+        });
+      }
     } finally {
       setIsLoading(false);
       setActiveStreamId(null);

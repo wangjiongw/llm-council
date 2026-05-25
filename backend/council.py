@@ -976,7 +976,8 @@ async def run_full_council_with_history(
 
 async def quick_query(
     user_query: Union[str, List[Dict[str, Any]]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    event_callback=None,
 ) -> Dict[str, Any]:
     """
     Quick single-model query without the 3-stage council process.
@@ -1024,24 +1025,71 @@ async def quick_query(
         else:
             messages = [{"role": "user", "content": user_query}]
 
-    # Query the quick model
-    response = await query_model_with_fallbacks(quick_models, messages)
+    attempts = []
+    for model in [model for model in quick_models if model]:
+        await _emit_stage_event(event_callback, {
+            "type": "quick_model_start",
+            "stage": "stage3",
+            "model": model,
+            "status": "running",
+        })
 
-    if not response or not response.get("content"):
-        return {
-            "model": quick_model,
-            "response": "Error: Model failed to respond. Please try again.",
-            "response_id": None,
-            "usage": {},
-            "finish_reason": None,
-            "metadata": {"attempts": (response or {}).get("attempts", [])},
-        }
+        async def on_model_event(event: Dict[str, Any]) -> None:
+            status = event.get("status")
+            await _emit_stage_event(event_callback, {
+                **event,
+                "type": f"quick_model_{status}",
+                "stage": "stage3",
+                "model": model,
+            })
+
+        response = await query_model(model, messages, event_callback=on_model_event)
+        attempt = {"model": model, "ok": bool(response and response.get("content"))}
+        if response and response.get("status") == "failed":
+            attempt["error_type"] = response.get("error_type")
+            attempt["error"] = response.get("error")
+        attempts.append(attempt)
+
+        if response and response.get("content"):
+            result = {
+                "model": response.get("model") or model,
+                "status": "success",
+                "response": response.get('content', ''),
+                "response_id": response.get('id') or response.get("response_id"),
+                "usage": response.get('usage', {}),
+                "finish_reason": response.get('finish_reason'),
+                "duration_seconds": response.get("duration_seconds"),
+                "first_event_seconds": response.get("first_event_seconds"),
+                "streamed": bool(response.get("streamed")),
+                "metadata": {"attempts": attempts},
+            }
+            await _emit_stage_event(event_callback, {
+                "type": "quick_model_complete",
+                "stage": "stage3",
+                "model": model,
+                "status": "success",
+                "duration_seconds": result.get("duration_seconds"),
+                "first_event_seconds": result.get("first_event_seconds"),
+                "streamed": result.get("streamed"),
+            })
+            return result
+
+        await _emit_stage_event(event_callback, {
+            "type": "quick_model_failed",
+            "stage": "stage3",
+            "model": model,
+            "status": "failed",
+            "error_type": (response or {}).get("error_type", "no_response"),
+            "error": (response or {}).get("error", "No response returned from model call"),
+            "duration_seconds": (response or {}).get("duration_seconds"),
+        })
 
     return {
-        "model": response.get("model") or quick_model,
-        "response": response.get('content', ''),
-        "response_id": response.get('id'),
-        "usage": response.get('usage', {}),
-        "finish_reason": response.get('finish_reason'),
-        "metadata": {"attempts": response.get("attempts", [])},
+        "model": quick_model,
+        "status": "failed",
+        "response": "Error: Model failed to respond. Please try again.",
+        "response_id": None,
+        "usage": {},
+        "finish_reason": None,
+        "metadata": {"attempts": attempts},
     }

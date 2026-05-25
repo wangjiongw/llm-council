@@ -230,6 +230,47 @@ export const api = {
   },
 
   /**
+   * Send a quick message and receive streaming lifecycle updates.
+   */
+  async sendQuickMessageStream(conversationId, content, onEvent, abortController = null) {
+    const controller = abortController || startAbortableRequest();
+    currentAbortController = controller;
+
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/quick/stream`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content }),
+        signal: controller.signal,
+      }
+    );
+
+    if (!response.ok) {
+      if (controller.signal.aborted) {
+        throw new Error('Query stopped by user');
+      }
+      throw new Error('Failed to send quick message');
+    }
+
+    try {
+      await readSSEEvents(response, onEvent, controller);
+    } catch (error) {
+      if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
+        console.log('Quick stream aborted by user');
+        throw new Error('Query stopped by user');
+      }
+      throw error;
+    } finally {
+      if (currentAbortController === controller) {
+        currentAbortController = null;
+      }
+    }
+  },
+
+  /**
    * Send a message with file attachments (images/PDFs).
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The text message content

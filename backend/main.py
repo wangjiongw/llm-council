@@ -352,6 +352,10 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
 
     # Run quick query
     quick_result = await quick_query(request.content, conversation_history)
+    metadata = {
+        "mode": "quick",
+        **(quick_result.get("metadata") or {}),
+    }
 
     # Add assistant message (quick responses are stored in stage3 for consistency)
     storage.add_assistant_message(
@@ -359,13 +363,189 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
         [],  # No stage1
         [],  # No stage2
         quick_result,  # Store in stage3
-        metadata=quick_result.get("metadata"),
+        metadata=metadata,
     )
 
     # Return the quick response
     return {
         "quick": quick_result
     }
+
+
+@app.post("/api/conversations/{conversation_id}/quick/stream")
+async def send_quick_message_stream(conversation_id: str, request: SendMessageRequest):
+    """
+    Send a message and stream the quick single-model response lifecycle.
+
+    Quick mode still stores responses in stage3 for compatibility with the
+    existing conversation renderer, but it avoids the 3-stage council process.
+    """
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    is_first_message = len(conversation["messages"]) == 0
+
+    async def event_generator():
+        try:
+            async def drain_model_events(task: asyncio.Task, queue: asyncio.Queue):
+                while not task.done():
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                while not queue.empty():
+                    event = queue.get_nowait()
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            async def enqueue_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await queue.put({
+                    key: value
+                    for key, value in event.items()
+                    if value is not None
+                })
+
+            conversation_history = None
+            if not is_first_message:
+                raw_history = storage.get_conversation_history(conversation_id)
+                if raw_history:
+                    conversation_history = await storage.build_conversation_context(
+                        raw_history,
+                        conversation_id=conversation_id,
+                    )
+
+            storage.add_user_message(conversation_id, request.content)
+            assistant_message_index = storage.create_assistant_partial(conversation_id)
+
+            def persist_assistant(updates: Dict[str, Any]) -> None:
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    updates,
+                )
+
+            async def enqueue_and_persist_model_event(queue: asyncio.Queue, event: Dict[str, Any]) -> None:
+                await enqueue_model_event(queue, event)
+                stage = event.get("stage")
+                model = event.get("model")
+                if stage and model:
+                    persist_assistant({
+                        "modelStatus": {
+                            stage: {
+                                model: {
+                                    key: value
+                                    for key, value in event.items()
+                                    if value is not None
+                                }
+                            }
+                        }
+                    })
+
+            title_task = None
+            if is_first_message:
+                title_task = asyncio.create_task(generate_conversation_title(request.content))
+
+            metadata = {"mode": "quick"}
+            persist_assistant({
+                "status": "running",
+                "stage1": [],
+                "stage2": [],
+                "metadata": metadata,
+                "loading": {
+                    "stage1": False,
+                    "stage2": False,
+                    "stage3": True,
+                },
+            })
+            yield f"data: {json.dumps({'type': 'quick_start'})}\n\n"
+
+            quick_queue: asyncio.Queue = asyncio.Queue()
+            quick_task = asyncio.create_task(quick_query(
+                request.content,
+                conversation_history,
+                event_callback=lambda event: enqueue_and_persist_model_event(quick_queue, event),
+            ))
+            async for event_chunk in drain_model_events(quick_task, quick_queue):
+                yield event_chunk
+            quick_result = await quick_task
+
+            metadata = {
+                "mode": "quick",
+                **(quick_result.get("metadata") or {}),
+            }
+            persist_assistant({
+                "status": "complete",
+                "stage1": [],
+                "stage2": [],
+                "stage3": quick_result,
+                "metadata": metadata,
+                "loading": {"stage3": False},
+                "error": None,
+            })
+            yield f"data: {json.dumps({'type': 'quick_complete', 'data': quick_result, 'metadata': metadata})}\n\n"
+
+            if title_task:
+                title = await title_task
+                storage.update_conversation_title(conversation_id, title)
+                yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+
+        except asyncio.CancelledError:
+            if "assistant_message_index" in locals():
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    {
+                        "status": "interrupted",
+                        "metadata": {"mode": "quick"},
+                        "error": "Client disconnected before the quick response completed.",
+                        "loading": {
+                            "stage1": False,
+                            "stage2": False,
+                            "stage3": False,
+                        },
+                    },
+                )
+            raise
+        except Exception as e:
+            if "assistant_message_index" in locals():
+                error_result = {
+                    "model": "quick",
+                    "status": "failed",
+                    "response": f"Error: {str(e)}",
+                    "error_type": "quick_stream_error",
+                    "error": str(e),
+                }
+                storage.update_assistant_partial(
+                    conversation_id,
+                    assistant_message_index,
+                    {
+                        "status": "failed",
+                        "stage1": [],
+                        "stage2": [],
+                        "stage3": error_result,
+                        "metadata": {"mode": "quick"},
+                        "error": str(e),
+                        "loading": {
+                            "stage1": False,
+                            "stage2": False,
+                            "stage3": False,
+                        },
+                    },
+                )
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @app.post("/api/conversations/{conversation_id}/message/stream")

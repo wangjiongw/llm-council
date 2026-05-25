@@ -85,6 +85,7 @@ const MessageItem = memo(function MessageItem({
   messageIndex,
 }) {
   const isUserMessage = msg.role === 'user';
+  const isQuickResponse = msg.metadata?.mode === 'quick';
   const restoredStatusText = !isUserMessage && !isLoading && (
     msg.status === 'interrupted'
       ? 'This council run was interrupted. Completed stages were preserved.'
@@ -95,6 +96,7 @@ const MessageItem = memo(function MessageItem({
           : ''
   );
   const canContinueSavedStages = !isUserMessage &&
+    !isQuickResponse &&
     isLastMessage &&
     !isLoading &&
     onResumeQuery &&
@@ -227,8 +229,12 @@ const MessageItem = memo(function MessageItem({
                 <div className="spinner"></div>
                 <span>
                   {hasPreviousTurns
-                    ? 'Running Stage 3: Final synthesis with full conversation context...'
-                    : 'Running Stage 3: Final synthesis...'
+                    ? (isQuickResponse
+                      ? 'Running quick response with conversation context...'
+                      : 'Running Stage 3: Final synthesis with full conversation context...')
+                    : (isQuickResponse
+                      ? 'Running quick response...'
+                      : 'Running Stage 3: Final synthesis...')
                   }
                 </span>
               </div>

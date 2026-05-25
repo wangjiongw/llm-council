@@ -105,7 +105,7 @@ class LLMSettingsTest(unittest.TestCase):
             "quick_fallback_models": ["fallback-model"],
         })
 
-        async def fake_query(model, messages, timeout=120.0):
+        async def fake_query(model, messages, timeout=120.0, event_callback=None):
             if model == "primary-model":
                 return None
             return {"model": model, "content": "fallback ok", "usage": {}}
@@ -116,7 +116,7 @@ class LLMSettingsTest(unittest.TestCase):
             return await quick_query("hello")
 
         import asyncio
-        with patch("backend.openrouter.query_model", new=AsyncMock(side_effect=fake_query)):
+        with patch("backend.council.query_model", new=AsyncMock(side_effect=fake_query)):
             result = asyncio.run(run_query())
 
         self.assertEqual(result["model"], "fallback-model")
