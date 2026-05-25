@@ -32,15 +32,16 @@ npm install
 cd ..
 ```
 
-### 2. Configure API Key
+### 2. Configure Provider
 
-Create a `.env` file in the project root:
+You can configure the provider from the app settings UI after the server starts. To seed initial defaults from the environment, create a `.env` file in the project root:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...
+OPENAI_API_KEY=
+OPENAI_API_BASE_URL=
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
+For OpenRouter, use `https://openrouter.ai/api/v1` as the base URL and paste the key in the frontend settings modal, or set it here before startup. Make sure to purchase the credits you need, or sign up for automatic top up.
 
 ### 3. Configure Models (Optional)
 
@@ -78,6 +79,26 @@ npm run dev
 ```
 
 Then open http://localhost:5173 in your browser.
+
+## Native Compute Node Deployment
+
+When deploying inside an Ubuntu compute-node instance that is reached through a management-node port mapping, use the native single-port setup:
+
+```bash
+cp .env.example .env
+# edit APP_PORT/BACKEND_* if needed; provider settings can be entered in the UI
+bash deploy/native/install.sh
+```
+
+Expose or map the management-node port to the compute-node `APP_PORT` and open:
+
+```text
+http://<management-node-ip>:<mapped-port>/
+```
+
+The frontend is served by system Nginx and calls the backend through same-origin `/api`, so users do not need direct access to backend port `8001`. See `deploy/native/README.md` for details.
+
+If the compute-node instance was not booted with systemd, the native install script automatically runs the backend as a normal background process and writes its PID/log under `.run/` and `logs/`.
 
 ## Tech Stack
 

@@ -1018,5 +1018,9 @@ async def update_file_queue_endpoint(
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+
+    host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    port = int(os.getenv("BACKEND_PORT", "8001"))
+    uvicorn.run(app, host=host, port=port)

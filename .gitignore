@@ -15,6 +15,10 @@ wheels/
 # Data files
 data/
 
+# Native deployment runtime files
+.run/
+logs/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
