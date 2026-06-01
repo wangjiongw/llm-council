@@ -75,6 +75,56 @@ class StageModelStatusEventsTest(unittest.TestCase):
         self.assertEqual(result["response"], "final answer")
         self.assertTrue(result["streamed"])
 
+    def test_stage3_synthesis_emits_fallback_model_events(self):
+        async def fake_query(model, messages, event_callback=None):
+            if model == "primary-chairman":
+                if event_callback:
+                    await event_callback({"status": "running"})
+                return {"status": "failed", "model": model, "error_type": "timeout", "error": "slow"}
+            if event_callback:
+                await event_callback({"status": "first_event", "first_event_seconds": 0.1})
+            return {
+                "status": "success",
+                "model": model,
+                "content": "fallback final answer",
+                "usage": {},
+                "duration_seconds": 0.8,
+                "first_event_seconds": 0.1,
+                "streamed": True,
+            }
+
+        async def run_helper():
+            from backend.council import stage3_synthesize_final_with_history
+
+            events = []
+            result = await stage3_synthesize_final_with_history(
+                "hello",
+                [{"model": "a", "status": "success", "response": "answer"}],
+                [{"model": "b", "status": "success", "ranking": "FINAL RANKING:\n1. Response A"}],
+                event_callback=lambda event: events.append(event),
+            )
+            return events, result
+
+        with (
+            patch("backend.council.model_name", return_value="primary-chairman"),
+            patch("backend.council.model_list", return_value=["fallback-chairman"]),
+            patch("backend.council.query_model", new=AsyncMock(side_effect=fake_query)),
+        ):
+            events, result = asyncio.run(run_helper())
+
+        model_events = [(event["type"], event["model"]) for event in events]
+        self.assertIn(("stage3_model_failed", "primary-chairman"), model_events)
+        self.assertIn(("stage3_model_complete", "fallback-chairman"), model_events)
+        self.assertEqual(result["model"], "fallback-chairman")
+        self.assertEqual(result["response"], "fallback final answer")
+        self.assertEqual(
+            result["metadata"]["attempts"],
+            [
+                {"model": "primary-chairman", "ok": False, "error_type": "timeout", "error": "slow"},
+                {"model": "fallback-chairman", "ok": True},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

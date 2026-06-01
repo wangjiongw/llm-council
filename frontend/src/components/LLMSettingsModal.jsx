@@ -5,6 +5,7 @@ const emptySettings = {
   default_provider: { base_url: '', api_key: '', timeout: 180, stream: true },
   council_models: [],
   chairman_model: '',
+  chairman_fallback_models: [],
   quick_model: '',
   quick_fallback_models: [],
   title_model: '',
@@ -61,6 +62,7 @@ export default function LLMSettingsModal({ open, onClose, api }) {
     const models = [
       ...settings.council_models,
       settings.chairman_model,
+      ...settings.chairman_fallback_models,
       settings.quick_model,
       settings.title_model,
       settings.summarization_model,
@@ -266,6 +268,14 @@ export default function LLMSettingsModal({ open, onClose, api }) {
 
           <section className="settings-section">
             <h3>Fallback Models</h3>
+            <label>
+              Chairman fallback
+              <textarea
+                rows={3}
+                value={joinLines(settings.chairman_fallback_models)}
+                onChange={e => updateField('chairman_fallback_models', splitLines(e.target.value))}
+              />
+            </label>
             <label>
               Quick fallback
               <textarea

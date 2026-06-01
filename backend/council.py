@@ -107,6 +107,122 @@ def _format_stage2_result(model: str, response: Dict[str, Any] | None) -> Dict[s
     }
 
 
+def _chairman_model_candidates() -> List[str]:
+    """Return chairman primary plus fallback models without duplicate attempts."""
+    candidates = [model_name("chairman_model"), *model_list("chairman_fallback_models")]
+    unique_models = []
+    seen = set()
+    for model in candidates:
+        if model and model not in seen:
+            unique_models.append(model)
+            seen.add(model)
+    return unique_models
+
+
+def _format_stage3_attempt(model: str, response: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Record a chairman synthesis model attempt for diagnostics."""
+    response = response or {}
+    ok = bool(response.get("content")) and response.get("status", "success") != "failed"
+    attempt = {"model": model, "ok": ok}
+    if not ok:
+        attempt["error_type"] = response.get("error_type", "no_response")
+        attempt["error"] = response.get("error", "No response returned from model call")
+    return attempt
+
+
+def _format_stage3_success(model: str, response: Dict[str, Any], attempts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Format a successful chairman synthesis response."""
+    return {
+        "model": response.get("model") or model,
+        "status": "success",
+        "response": response.get('content', ''),
+        "response_id": response.get('id') or response.get("response_id"),
+        "usage": response.get('usage', {}),
+        "finish_reason": response.get('finish_reason'),
+        "duration_seconds": response.get("duration_seconds"),
+        "first_event_seconds": response.get("first_event_seconds"),
+        "streamed": bool(response.get("streamed")),
+        "metadata": {"attempts": attempts},
+    }
+
+
+def _format_stage3_failure(primary_model: str, response: Dict[str, Any] | None, attempts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Format final chairman synthesis failure after all candidates fail."""
+    response = response or {}
+    result = {
+        "model": primary_model,
+        "status": "failed",
+        "response": "Error: Unable to generate final synthesis.",
+        "response_id": None,
+        "usage": {},
+        "finish_reason": None,
+        "error_type": response.get("error_type", "no_response"),
+        "error": response.get("error", "No response returned from model call"),
+        "metadata": {"attempts": attempts},
+    }
+    for key in ("duration_seconds", "first_event_seconds", "streamed"):
+        if key in response:
+            result[key] = response[key]
+    return result
+
+
+async def _query_chairman_with_fallbacks(messages: List[Dict[str, Any]], event_callback=None) -> Dict[str, Any]:
+    """Query chairman synthesis candidates until one returns content."""
+    candidates = _chairman_model_candidates()
+    primary_model = candidates[0] if candidates else model_name("chairman_model")
+    attempts = []
+    last_response = None
+
+    for model in candidates:
+        await _emit_stage_event(event_callback, {
+            "type": "stage3_model_start",
+            "stage": "stage3",
+            "model": model,
+            "status": "started",
+        })
+
+        async def on_model_event(event: Dict[str, Any], current_model: str = model) -> None:
+            status = event.get("status", "running")
+            await _emit_stage_event(event_callback, {
+                **event,
+                "type": f"stage3_model_{status}",
+                "stage": "stage3",
+                "model": current_model,
+            })
+
+        response = await query_model(model, messages, event_callback=on_model_event)
+        last_response = response
+        attempt = _format_stage3_attempt(model, response)
+        attempts.append(attempt)
+
+        if attempt["ok"]:
+            result = _format_stage3_success(model, response, attempts)
+            await _emit_stage_event(event_callback, {
+                "type": "stage3_model_complete",
+                "stage": "stage3",
+                "model": model,
+                "status": "success",
+                "duration_seconds": result.get("duration_seconds"),
+                "first_event_seconds": result.get("first_event_seconds"),
+                "streamed": result.get("streamed"),
+            })
+            return result
+
+        await _emit_stage_event(event_callback, {
+            "type": "stage3_model_failed",
+            "stage": "stage3",
+            "model": model,
+            "status": "failed",
+            "error_type": attempt.get("error_type"),
+            "error": attempt.get("error"),
+            "duration_seconds": (response or {}).get("duration_seconds"),
+            "first_event_seconds": (response or {}).get("first_event_seconds"),
+            "streamed": bool((response or {}).get("streamed")),
+        })
+
+    return _format_stage3_failure(primary_model, last_response, attempts)
+
+
 def _metadata_warnings(stage1_results: List[Dict[str, Any]], stage2_results: List[Dict[str, Any]] | None = None) -> List[str]:
     """Build user/debug-visible warnings without feeding them into prompts."""
     warnings = []
@@ -453,32 +569,7 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
     messages = [{"role": "user", "content": chairman_prompt}]
 
-    # Query the chairman model
-    chairman_model = model_name("chairman_model")
-    response = await query_model(chairman_model, messages)
-
-    if not response or response.get("status") == "failed":
-        # Fallback if chairman fails
-        return {
-            "model": chairman_model,
-            "status": "failed",
-            "response": "Error: Unable to generate final synthesis.",
-            "error_type": response.get("error_type") if response else "no_response",
-            "error": response.get("error") if response else "No response returned from model call",
-        }
-
-    # Return with full Response API metadata
-    return {
-        "model": chairman_model,
-        "status": "success",
-        "response": response.get('content', ''),
-        "response_id": response.get('id'),
-        "usage": response.get('usage', {}),
-        "finish_reason": response.get('finish_reason'),
-        "duration_seconds": response.get("duration_seconds"),
-        "first_event_seconds": response.get("first_event_seconds"),
-        "streamed": bool(response.get("streamed")),
-    }
+    return await _query_chairman_with_fallbacks(messages)
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -858,73 +949,7 @@ async def stage3_synthesize_final_with_history(
     # Create final prompt
     messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
 
-    # Query chairman model
-    chairman_model = model_name("chairman_model")
-    await _emit_stage_event(event_callback, {
-        "type": "stage3_model_start",
-        "stage": "stage3",
-        "model": chairman_model,
-        "status": "started",
-    })
-
-    async def on_model_event(event: Dict[str, Any]) -> None:
-        status = event.get("status", "running")
-        await _emit_stage_event(event_callback, {
-            "type": f"stage3_model_{status}",
-            "stage": "stage3",
-            "model": chairman_model,
-            **event,
-        })
-
-    response = await query_model(chairman_model, messages, event_callback=on_model_event)
-
-    # Return with full Response API metadata
-    if response and response.get("status") != "failed":
-        result = {
-            "model": chairman_model,
-            "status": "success",
-            "response": response.get('content', ''),
-            "response_id": response.get('id'),
-            "usage": response.get('usage', {}),
-            "finish_reason": response.get('finish_reason'),
-            "duration_seconds": response.get("duration_seconds"),
-            "first_event_seconds": response.get("first_event_seconds"),
-            "streamed": bool(response.get("streamed")),
-        }
-        await _emit_stage_event(event_callback, {
-            "type": "stage3_model_complete",
-            "stage": "stage3",
-            "model": chairman_model,
-            "status": "success",
-            "duration_seconds": result.get("duration_seconds"),
-            "first_event_seconds": result.get("first_event_seconds"),
-            "streamed": result.get("streamed"),
-        })
-        return result
-    else:
-        result = {
-            "model": chairman_model,
-            "status": "failed",
-            "response": "Error: Unable to generate final synthesis.",
-            "error_type": response.get("error_type") if response else "no_response",
-            "error": response.get("error") if response else "No response returned from model call",
-        }
-        if response:
-            result["duration_seconds"] = response.get("duration_seconds")
-            result["first_event_seconds"] = response.get("first_event_seconds")
-            result["streamed"] = bool(response.get("streamed"))
-        await _emit_stage_event(event_callback, {
-            "type": "stage3_model_failed",
-            "stage": "stage3",
-            "model": chairman_model,
-            "status": "failed",
-            "error_type": result.get("error_type"),
-            "error": result.get("error"),
-            "duration_seconds": result.get("duration_seconds"),
-            "first_event_seconds": result.get("first_event_seconds"),
-            "streamed": result.get("streamed"),
-        })
-        return result
+    return await _query_chairman_with_fallbacks(messages, event_callback=event_callback)
 
 
 async def run_full_council_with_history(

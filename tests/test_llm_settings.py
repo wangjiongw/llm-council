@@ -77,15 +77,18 @@ class LLMSettingsTest(unittest.TestCase):
     def test_empty_fallback_lists_use_implicit_nano_without_publicly_configuring_it(self):
         llm_settings.save_llm_settings({
             **llm_settings.DEFAULT_SETTINGS,
+            "chairman_fallback_models": [],
             "quick_fallback_models": [],
             "title_fallback_models": [],
             "summarization_fallback_models": [],
         })
 
         public_settings = llm_settings.public_llm_settings()
+        self.assertEqual(public_settings["chairman_fallback_models"], [])
         self.assertEqual(public_settings["quick_fallback_models"], [])
         self.assertEqual(public_settings["title_fallback_models"], [])
         self.assertEqual(public_settings["summarization_fallback_models"], [])
+        self.assertEqual(llm_settings.model_list("chairman_fallback_models"), ["gpt-5-nano"])
         self.assertEqual(llm_settings.model_list("quick_fallback_models"), ["gpt-5-nano"])
         self.assertEqual(llm_settings.model_list("title_fallback_models"), ["gpt-5-nano"])
         self.assertEqual(llm_settings.model_list("summarization_fallback_models"), ["gpt-5-nano"])
@@ -93,9 +96,11 @@ class LLMSettingsTest(unittest.TestCase):
     def test_configured_fallback_list_overrides_implicit_nano(self):
         llm_settings.save_llm_settings({
             **llm_settings.DEFAULT_SETTINGS,
+            "chairman_fallback_models": ["chairman-fallback"],
             "quick_fallback_models": ["custom-fallback"],
         })
 
+        self.assertEqual(llm_settings.model_list("chairman_fallback_models"), ["chairman-fallback"])
         self.assertEqual(llm_settings.model_list("quick_fallback_models"), ["custom-fallback"])
 
     def test_quick_query_uses_fallback_after_primary_failure(self):
@@ -126,6 +131,42 @@ class LLMSettingsTest(unittest.TestCase):
             [
                 {"model": "primary-model", "ok": False},
                 {"model": "fallback-model", "ok": True},
+            ],
+        )
+
+
+    def test_stage3_synthesis_uses_fallback_after_primary_failure(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "chairman_model": "primary-chairman",
+            "chairman_fallback_models": ["fallback-chairman"],
+        })
+
+        async def fake_query(model, messages, event_callback=None):
+            if model == "primary-chairman":
+                return {"status": "failed", "model": model, "error_type": "timeout", "error": "slow"}
+            return {"status": "success", "model": model, "content": "fallback synthesis", "usage": {}}
+
+        async def run_query():
+            from backend.council import stage3_synthesize_final
+
+            return await stage3_synthesize_final(
+                "hello",
+                [{"model": "a", "status": "success", "response": "answer"}],
+                [{"model": "b", "status": "success", "ranking": "FINAL RANKING:\n1. Response A"}],
+            )
+
+        import asyncio
+        with patch("backend.council.query_model", new=AsyncMock(side_effect=fake_query)):
+            result = asyncio.run(run_query())
+
+        self.assertEqual(result["model"], "fallback-chairman")
+        self.assertEqual(result["response"], "fallback synthesis")
+        self.assertEqual(
+            result["metadata"]["attempts"],
+            [
+                {"model": "primary-chairman", "ok": False, "error_type": "timeout", "error": "slow"},
+                {"model": "fallback-chairman", "ok": True},
             ],
         )
 

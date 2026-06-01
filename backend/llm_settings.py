@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).with_name(".env"))
 SETTINGS_PATH = Path(DATA_DIR) / "llm_settings.json"
 IMPLICIT_FALLBACK_MODEL = "gpt-5-nano"
 FALLBACK_MODEL_LIST_KEYS = {
+    "chairman_fallback_models",
     "quick_fallback_models",
     "title_fallback_models",
     "summarization_fallback_models",
@@ -43,6 +44,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "gemini-3-pro-preview",
     ],
     "chairman_model": "gemini-3-pro-preview",
+    "chairman_fallback_models": [],
     "quick_model": "gemini-2.5-flash",
     "quick_fallback_models": [],
     "title_model": "gemini-2.5-flash",

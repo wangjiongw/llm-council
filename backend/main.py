@@ -58,6 +58,7 @@ class UpdateLLMSettingsRequest(BaseModel):
     default_provider: Dict[str, Any] | None = None
     council_models: List[str] | None = None
     chairman_model: str | None = None
+    chairman_fallback_models: List[str] | None = None
     quick_model: str | None = None
     quick_fallback_models: List[str] | None = None
     title_model: str | None = None
