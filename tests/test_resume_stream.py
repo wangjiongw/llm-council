@@ -108,7 +108,10 @@ class ResumeStreamTest(unittest.TestCase):
         self.assertEqual(assistant["status"], "complete")
         self.assertEqual(assistant["stage1"], stage1)
         self.assertEqual(assistant["stage2"], stage2)
-        self.assertEqual(assistant["metadata"], metadata)
+        self.assertEqual(assistant["metadata"]["label_to_model"], metadata["label_to_model"])
+        self.assertEqual(assistant["metadata"]["aggregate_rankings"], metadata["aggregate_rankings"])
+        self.assertEqual(assistant["metadata"]["mode"], "council_resume")
+        self.assertEqual(assistant["metadata"]["context_snapshot"]["mode"], "council_resume")
         self.assertEqual(assistant["stage3"], stage3)
 
     def test_resume_reruns_stage2_when_saved_stage2_has_no_successful_rankings(self):

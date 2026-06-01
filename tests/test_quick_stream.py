@@ -77,6 +77,25 @@ class QuickStreamTest(unittest.TestCase):
             "success",
         )
 
+        turns = conversation["turns"]
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["mode"], "quick")
+        self.assertEqual(turns[0]["status"], "complete")
+        self.assertEqual(turns[0]["user_message_index"], 0)
+        self.assertEqual(turns[0]["assistant_message_index"], 1)
+        self.assertEqual(turns[0]["context_snapshot"]["mode"], "quick")
+        self.assertEqual(turns[0]["context_payload"]["schema"], "context_payload_v1")
+        self.assertEqual(turns[0]["context_payload"]["model_messages"], [])
+        self.assertEqual(turns[0]["context_payload"]["audit_messages"], [])
+        self.assertEqual(turns[0]["context_payload"]["current_message"], {"role": "user", "content": "hello quick"})
+        self.assertEqual(turns[0]["runs"][0]["stage"], "stage3")
+        self.assertEqual(turns[0]["runs"][0]["model"], "quick-model")
+
+        audit = self.client.get("/api/conversations/conv-1/context")
+        self.assertEqual(audit.status_code, 200)
+        self.assertEqual(audit.json()["turn_count"], 1)
+        self.assertEqual(audit.json()["turns"][0]["id"], turns[0]["id"])
+
     def test_quick_stream_persists_failed_placeholder_on_error(self):
         with (
             patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Quick title")),
@@ -98,6 +117,9 @@ class QuickStreamTest(unittest.TestCase):
         self.assertEqual(assistant["stage3"]["status"], "failed")
         self.assertIn("provider down", assistant["error"])
         self.assertFalse(assistant["loading"]["stage3"])
+        self.assertEqual(conversation["turns"][0]["status"], "failed")
+        self.assertEqual(conversation["turns"][0]["context_snapshot"]["mode"], "quick")
+        self.assertEqual(conversation["turns"][0]["runs"][0]["status"], "failed")
 
 
 if __name__ == "__main__":

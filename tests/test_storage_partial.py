@@ -64,6 +64,32 @@ class AssistantPartialStorageTest(unittest.TestCase):
 
         self.assertEqual(history, [{"role": "user", "content": "hello"}])
 
+    def test_history_skips_context_excluded_messages(self):
+        storage.create_conversation("conv-1")
+        storage.add_user_message("conv-1", "visible question")
+        storage.add_assistant_message(
+            "conv-1",
+            [],
+            [],
+            {"model": "m", "status": "success", "response": "hidden answer"},
+        )
+        storage.add_user_message("conv-1", "hidden question")
+        storage.add_assistant_message(
+            "conv-1",
+            [],
+            [],
+            {"model": "m", "status": "success", "response": "visible answer"},
+        )
+        storage.set_message_context_excluded("conv-1", 1, True)
+        storage.set_message_context_excluded("conv-1", 2, True)
+
+        history = storage.get_conversation_history("conv-1")
+
+        self.assertEqual(history, [
+            {"role": "user", "content": "visible question"},
+            {"role": "assistant", "content": "visible answer"},
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

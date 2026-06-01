@@ -2,6 +2,8 @@
 
 import base64
 import io
+import os
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Union, Tuple
 
@@ -20,6 +22,9 @@ class FileProcessor:
     MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
     MAX_PDF_SIZE = 50 * 1024 * 1024  # 50MB
     MAX_TEXT_CHARS = 120_000
+    DEFAULT_CONTEXT_TEXT_CHARS = 16_000
+    DEFAULT_CHUNK_CHARS = 2_000
+    DEFAULT_MAX_SELECTED_CHUNKS = 6
 
     # Supported MIME types
     SUPPORTED_TEXT_TYPES = [
@@ -133,17 +138,134 @@ class FileProcessor:
         return text
 
     @staticmethod
-    def text_content_item(filename: str, text: str) -> Dict[str, Any]:
+    def _context_limits() -> Tuple[int, int, int]:
+        max_context_chars = int(os.getenv(
+            "FILE_CONTEXT_MAX_CHARS",
+            str(FileProcessor.DEFAULT_CONTEXT_TEXT_CHARS),
+        ))
+        chunk_chars = int(os.getenv(
+            "FILE_CONTEXT_CHUNK_CHARS",
+            str(FileProcessor.DEFAULT_CHUNK_CHARS),
+        ))
+        max_chunks = int(os.getenv(
+            "FILE_CONTEXT_MAX_CHUNKS",
+            str(FileProcessor.DEFAULT_MAX_SELECTED_CHUNKS),
+        ))
+        return max(1000, max_context_chars), max(500, chunk_chars), max(1, max_chunks)
+
+    @staticmethod
+    def _query_terms(query: str) -> List[str]:
+        terms = []
+        seen = set()
+        for term in re.findall(r"[\w\u4e00-\u9fff]{2,}", query.lower()):
+            if term not in seen:
+                seen.add(term)
+                terms.append(term)
+        return terms
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_chars: int) -> List[Dict[str, Any]]:
+        chunks = []
+        current = []
+        current_len = 0
+
+        blocks = re.split(r"\n{2,}", text)
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            while len(block) > chunk_chars:
+                part = block[:chunk_chars].rstrip()
+                chunks.append({"index": len(chunks) + 1, "text": part})
+                block = block[chunk_chars:].lstrip()
+            block_len = len(block) + 2
+            if current and current_len + block_len > chunk_chars:
+                chunks.append({"index": len(chunks) + 1, "text": "\n\n".join(current).strip()})
+                current = []
+                current_len = 0
+            current.append(block)
+            current_len += block_len
+
+        if current:
+            chunks.append({"index": len(chunks) + 1, "text": "\n\n".join(current).strip()})
+
+        return chunks or [{"index": 1, "text": text[:chunk_chars]}]
+
+    @staticmethod
+    def _score_chunk(text: str, terms: List[str]) -> int:
+        if not terms:
+            return 0
+        lowered = text.lower()
+        score = 0
+        for term in terms:
+            hits = lowered.count(term)
+            if hits:
+                score += 4 + hits
+        return score
+
+    @staticmethod
+    def select_relevant_text(filename: str, text: str, query: str = "") -> Dict[str, Any]:
+        max_context_chars, chunk_chars, max_chunks = FileProcessor._context_limits()
+        if len(text) <= max_context_chars:
+            return {
+                "text": text,
+                "selected_chunks": 1 if text else 0,
+                "total_chunks": 1 if text else 0,
+                "truncated": False,
+            }
+
+        chunks = FileProcessor._chunk_text(text, chunk_chars)
+        terms = FileProcessor._query_terms(query)
+        scored = [
+            {
+                "index": chunk["index"],
+                "text": chunk["text"],
+                "score": FileProcessor._score_chunk(chunk["text"], terms),
+            }
+            for chunk in chunks
+        ]
+        if terms and any(item["score"] > 0 for item in scored):
+            selected = sorted(scored, key=lambda item: (-item["score"], item["index"]))[:max_chunks]
+            selected = sorted(selected, key=lambda item: item["index"])
+        else:
+            selected = scored[:max_chunks]
+
+        selected_text = "\n\n".join(
+            f"[Chunk {item['index']} of {len(chunks)}]\n{item['text']}"
+            for item in selected
+        )
+        selected_text += (
+            f"\n\n[Selected {len(selected)} of {len(chunks)} chunks from {filename} "
+            "for the current query and context budget]"
+        )
+        return {
+            "text": selected_text,
+            "selected_chunks": len(selected),
+            "total_chunks": len(chunks),
+            "truncated": True,
+        }
+
+    @staticmethod
+    def text_content_item(filename: str, text: str, query: str = "") -> Dict[str, Any]:
         """
         Wrap extracted file text as a normal chat-completions text item.
 
         This keeps uploads compatible with OpenAI-compatible servers that only
         support ordinary text chat messages.
         """
-        return {
+        selected = FileProcessor.select_relevant_text(filename, text, query)
+        item = {
             "type": "text",
-            "text": f"\n\n[Attached file: {filename}]\n{text}\n[/Attached file: {filename}]"
+            "text": f"\n\n[Attached file: {filename}]\n{selected['text']}\n[/Attached file: {filename}]"
         }
+        if selected["truncated"]:
+            item["file_context"] = {
+                "filename": filename,
+                "strategy": "query_relevant_chunks_v1",
+                "selected_chunks": selected["selected_chunks"],
+                "total_chunks": selected["total_chunks"],
+            }
+        return item
 
     @staticmethod
     def encode_image_to_base64(content: bytes, file_type: str) -> str:
@@ -164,7 +286,8 @@ class FileProcessor:
     def extract_pdf_text(
         content: bytes,
         filename: str,
-        max_pages: int = 50
+        max_pages: int = 50,
+        query: str = "",
     ) -> Dict[str, Any]:
         """
         Extract selectable text from a PDF and wrap it as a text content item.
@@ -193,13 +316,14 @@ class FileProcessor:
                 + f"\n\n[Truncated {filename} to {FileProcessor.MAX_TEXT_CHARS} characters]"
             )
 
-        return FileProcessor.text_content_item(filename, text)
+        return FileProcessor.text_content_item(filename, text, query=query)
 
     @staticmethod
     def process_file(
         filename: str,
         content: bytes,
-        file_type: str
+        file_type: str,
+        query: str = "",
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
         Process a single file and return multimodal content.
@@ -225,7 +349,7 @@ class FileProcessor:
 
         if file_type in FileProcessor.SUPPORTED_TEXT_TYPES or suffix in FileProcessor.SUPPORTED_TEXT_EXTENSIONS:
             text = FileProcessor.decode_text(content, filename)
-            return FileProcessor.text_content_item(filename, text)
+            return FileProcessor.text_content_item(filename, text, query=query)
 
         elif file_type in FileProcessor.SUPPORTED_IMAGE_TYPES:
             # Image: encode as base64
@@ -239,13 +363,13 @@ class FileProcessor:
 
         elif file_type in FileProcessor.SUPPORTED_PDF_TYPES:
             # Prefer text extraction for OpenAI-compatible server portability.
-            return FileProcessor.extract_pdf_text(content, filename)
+            return FileProcessor.extract_pdf_text(content, filename, query=query)
 
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
 
 
-async def process_uploaded_files(files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def process_uploaded_files(files: List[Dict[str, Any]], query: str = "") -> List[Dict[str, Any]]:
     """
     Process multiple uploaded files.
 
@@ -262,7 +386,8 @@ async def process_uploaded_files(files: List[Dict[str, Any]]) -> List[Dict[str, 
         processed = FileProcessor.process_file(
             file_data['filename'],
             file_data['content'],
-            file_data['file_type']
+            file_data['file_type'],
+            query=query,
         )
 
         # Image: single dict
