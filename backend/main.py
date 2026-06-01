@@ -1042,6 +1042,7 @@ async def resume_message_stream(conversation_id: str, message_index: int):
 async def send_message_with_files(
     conversation_id: str,
     content: str = Form(...),
+    mode: str = Form("council"),
     files: List[UploadFile] = File(default=[])
 ):
     """
@@ -1059,6 +1060,10 @@ async def send_message_with_files(
         conversation = storage.get_conversation(conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
+
+        mode = mode.strip().lower()
+        if mode not in {"council", "quick"}:
+            raise HTTPException(status_code=400, detail="File message mode must be 'council' or 'quick'")
 
         is_first_message = len(conversation["messages"]) == 0
 
@@ -1081,12 +1086,13 @@ async def send_message_with_files(
         # 2.5 Extract file metadata for UI display
         file_metadata = []
         for f in uploaded_files:
+            file_type = f['file_type'] or ''
             file_metadata.append({
                 'id': str(uuid.uuid4()),
                 'name': f['filename'],
-                'type': f['file_type'],
+                'type': file_type,
                 'size': len(f['content']),
-                'category': 'image' if f['file_type'].startswith('image/') else 'document'
+                'category': 'image' if file_type.startswith('image/') else 'document'
             })
 
         # 3. Build content array
@@ -1100,7 +1106,7 @@ async def send_message_with_files(
             # No files: text only
             content_array = content
 
-        # 4. Run full council process
+        # 4. Build prior conversation history before saving the current turn.
         raw_history = storage.get_conversation_history(conversation_id)
         conversation_history = None
         if raw_history:
@@ -1109,10 +1115,19 @@ async def send_message_with_files(
                 conversation_id=conversation_id,
             )
 
-        stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
-            content_array,
-            conversation_history=conversation_history
-        )
+        if mode == "quick":
+            stage1_results = []
+            stage2_results = []
+            stage3_result = await quick_query(content_array, conversation_history)
+            metadata = {
+                "mode": "quick",
+                **(stage3_result.get("metadata") or {}),
+            }
+        else:
+            stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
+                content_array,
+                conversation_history=conversation_history
+            )
 
         # 5. Save user message (with file metadata)
         storage.add_user_message(conversation_id, content_array, files=file_metadata)

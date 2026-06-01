@@ -478,7 +478,7 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
       onSendMessage(input, attachedFiles);
       setInput('');
-      // Note: Not clearing attachedFiles - they persist for next message
+      // App clears sent files after a successful response.
     }
   }, [input, attachedFiles, isLoading, onSendMessage]);
 
@@ -487,7 +487,7 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
       onSendQuickMessage(input, attachedFiles);
       setInput('');
-      // Note: Not clearing attachedFiles - they persist for next message
+      // App clears sent files after a successful response.
     }
   }, [input, attachedFiles, isLoading, onSendQuickMessage]);
 

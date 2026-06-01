@@ -62,6 +62,70 @@ class FileUploadApiTest(unittest.TestCase):
         self.assertIn("[Attached file: notes.md]", content_array[1]["text"])
         self.assertIn("Ship upload support.", content_array[1]["text"])
 
+
+    def test_quick_mode_with_file_uses_quick_query(self):
+        quick_mock = AsyncMock(return_value={
+            "model": "quick-model",
+            "status": "success",
+            "response": "quick file ok",
+            "metadata": {"attempts": [{"model": "quick-model", "ok": True}]},
+        })
+        council_mock = AsyncMock(return_value=([{}], [], {"response": "wrong path"}, {}))
+
+        with (
+            patch("backend.main.quick_query", new=quick_mock),
+            patch("backend.main.run_full_council_with_history", new=council_mock),
+            patch(
+                "backend.main.generate_conversation_title",
+                new=AsyncMock(return_value="Quick upload"),
+            ),
+        ):
+            response = self.client.post(
+                "/api/conversations/conv-1/message/files",
+                data={"content": "answer from this file", "mode": "quick"},
+                files={"files": ("notes.md", b"Important context", "text/markdown")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        council_mock.assert_not_awaited()
+        quick_mock.assert_awaited_once()
+        content_array = quick_mock.call_args.args[0]
+        self.assertEqual(content_array[0], {"type": "text", "text": "answer from this file"})
+        self.assertIn("Important context", content_array[1]["text"])
+
+        payload = response.json()
+        self.assertEqual(payload["stage1_results"], [])
+        self.assertEqual(payload["stage2_results"], [])
+        self.assertEqual(payload["stage3_result"]["response"], "quick file ok")
+        self.assertEqual(payload["metadata"]["mode"], "quick")
+        self.assertEqual(payload["metadata"]["attempts"], [{"model": "quick-model", "ok": True}])
+
+        conversation = storage.get_conversation("conv-1")
+        self.assertEqual(conversation["messages"][0]["role"], "user")
+        self.assertEqual(conversation["messages"][1]["metadata"]["mode"], "quick")
+        self.assertEqual(conversation["messages"][1]["stage1"], [])
+        self.assertEqual(conversation["messages"][1]["stage2"], [])
+
+    def test_rejects_invalid_file_message_mode_before_model_call(self):
+        council_mock = AsyncMock()
+        quick_mock = AsyncMock()
+
+        with (
+            patch("backend.main.run_full_council_with_history", new=council_mock),
+            patch("backend.main.quick_query", new=quick_mock),
+        ):
+            response = self.client.post(
+                "/api/conversations/conv-1/message/files",
+                data={"content": "hello", "mode": "fast"},
+                files={"files": ("notes.md", b"Important context", "text/markdown")},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("mode must be", response.json()["detail"])
+        council_mock.assert_not_awaited()
+        quick_mock.assert_not_awaited()
+        self.assertEqual(storage.get_conversation("conv-1")["messages"], [])
+
     def test_rejects_unsupported_file_type(self):
         response = self.client.post(
             "/api/conversations/conv-1/message/files",

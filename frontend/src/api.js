@@ -275,12 +275,14 @@ export const api = {
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The text message content
    * @param {Array} files - Array of File objects to upload
+   * @param {string} mode - Either 'council' or 'quick'
    * @returns {Promise<Object>} Response with stage1_results, stage2_results, stage3_result, metadata, file_metadata
    */
-  async sendMessageWithFiles(conversationId, content, files) {
+  async sendMessageWithFiles(conversationId, content, files, mode = 'council') {
     const controller = startAbortableRequest();
     const formData = new FormData();
     formData.append('content', content);
+    formData.append('mode', mode);
 
     files.forEach(file => {
       formData.append('files', file.rawFile || file);

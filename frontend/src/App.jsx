@@ -61,17 +61,9 @@ function App() {
     }
   };
 
-  const handleSelectConversation = async (id) => {
+  const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
-
-    // Load file queue for this conversation
-    try {
-      const fileQueueData = await api.getFileQueue(id);
-      setAttachedFiles(fileQueueData.files || []);
-    } catch (error) {
-      console.error('Failed to load file queue:', error);
-      setAttachedFiles([]);
-    }
+    setAttachedFiles([]);
   };
 
   const handleUpdateTitle = async (conversationId, newTitle) => {
@@ -184,19 +176,8 @@ function App() {
     }
   };
 
-  // File delete handler with backend sync
-  const handleDeleteFile = async (fileId) => {
-    const updatedFiles = attachedFiles.filter(f => f.id !== fileId);
-    setAttachedFiles(updatedFiles);
-
-    // Sync to backend if we have a current conversation
-    if (currentConversationId) {
-      try {
-        await api.updateFileQueue(currentConversationId, updatedFiles);
-      } catch (error) {
-        console.error('Failed to update file queue on backend:', error);
-      }
-    }
+  const handleDeleteFile = (fileId) => {
+    setAttachedFiles(attachedFiles.filter(f => f.id !== fileId));
   };
 
   const handleStopQuery = () => {
@@ -473,7 +454,7 @@ function App() {
       // Send message with streaming (or file upload if files present)
       if (hasFiles) {
         // Use file upload endpoint (non-streaming)
-        const response = await api.sendMessageWithFiles(currentConversationId, content, files);
+        const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'council');
 
         // Add assistant response
         setCurrentConversation((prev) => ({
@@ -492,7 +473,7 @@ function App() {
 
         // Files are one-shot browser File objects. Sent file metadata stays on
         // the message; the pending queue is cleared after success.
-        setAttachedFiles(response.file_queue || []);
+        setAttachedFiles([]);
 
         // Reload conversations list
         loadConversations();
@@ -624,10 +605,9 @@ function App() {
       }));
 
       if (files.length > 0) {
-        // Files present, use file upload endpoint (runs full council)
-        const response = await api.sendMessageWithFiles(currentConversationId, content, files);
+        const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'quick');
 
-        // Add assistant response (full council format)
+        // Add assistant response in quick-compatible stage3 format
         setCurrentConversation((prev) => ({
           ...prev,
           messages: [
@@ -644,7 +624,7 @@ function App() {
 
         // Files are one-shot browser File objects. Sent file metadata stays on
         // the message; the pending queue is cleared after success.
-        setAttachedFiles(response.file_queue || []);
+        setAttachedFiles([]);
       } else {
         const assistantMessage = {
           role: 'assistant',
@@ -686,7 +666,6 @@ function App() {
       }
 
       if (files.length > 0) {
-        // File quick submissions currently use the non-streaming file endpoint.
         setCurrentConversation((prev) => ({
           ...prev,
           messages: prev.messages.slice(0, -1),
