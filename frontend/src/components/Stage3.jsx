@@ -1,6 +1,5 @@
 import { useState, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import RichMarkdown from './RichMarkdown';
 import './Stage3.css';
 
 const CopyButton = ({ content, onCopy }) => {
@@ -73,9 +72,7 @@ function Stage3({ finalResponse, hasContext = false }) {
             onCopy={() => console.log(`Copied final answer from ${finalResponse.model}`)}
           />
         </div>
-        <div className="final-text markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalResponse.response}</ReactMarkdown>
-        </div>
+        <RichMarkdown content={finalResponse.response} className="final-text" />
       </div>
     </div>
   );

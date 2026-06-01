@@ -125,6 +125,239 @@ export const api = {
   },
 
   /**
+   * Create a new conversation branch from a selected message.
+   */
+  async forkConversation(conversationId, messageIndex) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/fork`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message_index: messageIndex }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to branch conversation');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get context snapshots and model-run audit records for a conversation.
+   */
+  async getConversationContext(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to get conversation context');
+    }
+    return response.json();
+  },
+
+  /**
+   * Search locally stored conversation history for reusable context.
+   */
+  async searchConversationHistory(query, limit = 20) {
+    const params = new URLSearchParams({ q: query || '', limit: String(limit) });
+    const response = await fetch(`${API_BASE}/api/conversations/search?${params.toString()}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to search conversation history');
+    }
+    return response.json();
+  },
+
+  /**
+   * Preview the model-facing context package for the next turn.
+   */
+  async previewConversationContext(conversationId, content = '', mode = 'council', files = []) {
+    if (files.length > 0) {
+      const formData = new FormData();
+      formData.append('content', content || '');
+      formData.append('mode', mode);
+      files.forEach(file => {
+        formData.append('files', file.rawFile || file);
+      });
+
+      const response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/context/preview/files`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to preview context');
+      }
+      return response.json();
+    }
+
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context/preview`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: content || '', mode }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to preview context');
+    }
+    return response.json();
+  },
+
+  /**
+   * Rebuild the context package for a stored user message without mutating it.
+   */
+  async replayMessageContext(conversationId, messageIndex, mode = null) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/messages/${messageIndex}/context/replay`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mode }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to rebuild context');
+    }
+    return response.json();
+  },
+
+
+  /**
+   * Clear the cached context summary for a conversation.
+   */
+  async clearContextSummary(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-summary`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to clear context summary');
+    }
+    return response.json();
+  },
+
+  /**
+   * Rebuild the cached context summary for a conversation.
+   */
+  async rebuildContextSummary(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-summary/rebuild`,
+      { method: 'POST' }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to rebuild context summary');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get the effective context policy for one conversation.
+   */
+  async getContextPolicy(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-policy`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to get context policy');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update the per-conversation context policy.
+   */
+  async updateContextPolicy(conversationId, policy) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-policy`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(policy),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update context policy');
+    }
+    return response.json();
+  },
+
+  /**
+   * Add durable user-managed memory to a conversation.
+   */
+  async addContextMemory(conversationId, content, enabled = true) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-memory`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content, enabled }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to add context memory');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update durable user-managed memory.
+   */
+  async updateContextMemory(conversationId, memoryId, updates) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-memory/${memoryId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update context memory');
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete durable user-managed memory.
+   */
+  async deleteContextMemory(conversationId, memoryId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/context-memory/${memoryId}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to delete context memory');
+    }
+    return response.json();
+  },
+
+  /**
    * Update conversation title.
    * @param {string} conversationId - The conversation ID
    * @param {string} title - The new title
@@ -191,6 +424,78 @@ export const api = {
       );
       if (!response.ok) {
         throw new Error('Failed to send message');
+      }
+      return response.json();
+    } catch (error) {
+      normalizeAbortError(error);
+    } finally {
+      finishAbortableRequest(controller);
+    }
+  },
+
+  /**
+   * Pin or unpin a message so it is considered durable context.
+   */
+  async setMessagePinned(conversationId, messageIndex, pinned) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/messages/${messageIndex}/pin`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ pinned }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update message pin');
+    }
+    return response.json();
+  },
+
+  /**
+   * Include or exclude a message from future model context.
+   */
+  async setMessageContextExcluded(conversationId, messageIndex, excluded) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/messages/${messageIndex}/context-visibility`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ excluded }),
+      }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update message context visibility');
+    }
+    return response.json();
+  },
+
+  /**
+   * Retry a stored user message without appending a duplicate user turn.
+   */
+  async retryMessage(conversationId, messageIndex, mode = null) {
+    const controller = startAbortableRequest();
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/conversations/${conversationId}/messages/${messageIndex}/retry`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ mode }),
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to retry message');
       }
       return response.json();
     } catch (error) {

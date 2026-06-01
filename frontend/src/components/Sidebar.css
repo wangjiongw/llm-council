@@ -1,7 +1,9 @@
 .sidebar {
   width: 260px;
-  background: #f8f8f8;
-  border-right: 1px solid #e0e0e0;
+  flex: 0 0 260px;
+  min-width: 260px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -9,20 +11,48 @@
 
 .sidebar-header {
   padding: 16px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .sidebar-header h1 {
+  min-width: 0;
+  margin: 0;
+  color: var(--app-text);
   font-size: 18px;
-  margin: 0 0 12px 0;
-  color: #333;
+}
+
+.theme-toggle-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.theme-toggle-btn:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 
 .new-conversation-btn {
   width: 100%;
   padding: 10px;
-  background: #4a90e2;
-  border: 1px solid #4a90e2;
+  background: var(--primary);
+  border: 1px solid var(--primary);
   border-radius: 6px;
   color: #fff;
   cursor: pointer;
@@ -32,18 +62,18 @@
 }
 
 .new-conversation-btn:hover {
-  background: #357abd;
-  border-color: #357abd;
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 
 .settings-btn {
   width: 100%;
   margin-top: 8px;
   padding: 10px;
-  background: #fff;
-  border: 1px solid #d0d7de;
+  background: var(--surface-bg);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  color: #333;
+  color: var(--app-text);
   cursor: pointer;
   font-size: 14px;
   transition: background 0.2s, border-color 0.2s;
@@ -51,8 +81,8 @@
 }
 
 .settings-btn:hover {
-  background: #f0f6ff;
-  border-color: #4a90e2;
+  background: var(--primary-soft);
+  border-color: var(--primary);
 }
 
 .conversation-list {
@@ -64,7 +94,7 @@
 .no-conversations {
   padding: 16px;
   text-align: center;
-  color: #999;
+  color: var(--text-subtle);
   font-size: 14px;
 }
 
@@ -77,22 +107,26 @@
 }
 
 .conversation-item:hover {
-  background: #f0f0f0;
+  background: var(--surface-muted);
 }
 
 .conversation-item.active {
-  background: #e8f0fe;
-  border: 1px solid #4a90e2;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary);
 }
 
 .conversation-title {
-  color: #333;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text);
   font-size: 14px;
   margin-bottom: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-meta {
-  color: #999;
+  color: var(--text-subtle);
   font-size: 12px;
 }
 
@@ -166,14 +200,14 @@
   width: 100%;
   padding: 6px 8px;
   font-size: 14px;
-  border: 1px solid #4a90e2;
+  border: 1px solid var(--primary);
   border-radius: 4px;
   outline: none;
   font-family: inherit;
 }
 
 .title-input:focus {
-  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .title-edit-actions {

@@ -1,6 +1,5 @@
 import { useState, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import RichMarkdown from './RichMarkdown';
 import './Stage2.css';
 
 const CopyButton = ({ content, onCopy }) => {
@@ -119,11 +118,10 @@ function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false 
           <pre className="failure-details">{failureDetails}</pre>
         ) : (
           <>
-            <div className="ranking-content markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {deAnonymizeText(activeRanking.ranking, labelToModel)}
-              </ReactMarkdown>
-            </div>
+            <RichMarkdown
+              content={deAnonymizeText(activeRanking.ranking, labelToModel)}
+              className="ranking-content"
+            />
 
             {activeRanking.parsed_ranking &&
              activeRanking.parsed_ranking.length > 0 && (

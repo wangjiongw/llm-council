@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import RichMarkdown from './RichMarkdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
@@ -10,6 +9,20 @@ import UploadButton from './UploadButton';
 import { formatFileSize } from '../utils/fileUtils';
 import './ChatInterface.css';
 import './FileQueue.css';
+
+const contentToText = (content) => {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter(item => item?.type === 'text')
+      .map(item => item.text || '')
+      .join('\n')
+      .trim();
+  }
+  return '';
+};
 
 // Collapsible section component for Stage 1 and Stage 2
 const CollapsibleStage = memo(function CollapsibleStage({
@@ -71,6 +84,175 @@ const ModelStatusList = memo(function ModelStatusList({ statuses }) {
   );
 });
 
+const formatCount = (value, unit) => `${value || 0} ${unit}${value === 1 ? '' : 's'}`;
+
+const ContextAuditDetails = memo(function ContextAuditDetails({ turnAudit, fallbackSnapshot, onReplayContext }) {
+  const [replay, setReplay] = useState(null);
+  const [replayError, setReplayError] = useState('');
+  const [isReplayLoading, setIsReplayLoading] = useState(false);
+  const snapshot = turnAudit?.context_snapshot || fallbackSnapshot;
+
+  useEffect(() => {
+    setReplay(null);
+    setReplayError('');
+    setIsReplayLoading(false);
+  }, [turnAudit?.id]);
+
+  if (!snapshot) return null;
+
+  const runs = turnAudit?.runs || [];
+  const currentTurn = snapshot.current_turn || {};
+  const fileContexts = currentTurn.file_contexts || [];
+  const included = snapshot.included_history_messages || 0;
+  const omitted = snapshot.omitted_history_messages || 0;
+  const summaryUsed = Boolean(snapshot.summary_used);
+  const pinnedCount = snapshot.included_pinned_messages || 0;
+  const excludedCount = snapshot.excluded_history_messages || 0;
+  const mode = turnAudit?.mode || snapshot.mode;
+  const status = turnAudit?.status;
+  const canReplay = Boolean(onReplayContext && typeof turnAudit?.user_message_index === 'number');
+
+  const handleReplayContext = async () => {
+    if (!canReplay || isReplayLoading) return;
+    setIsReplayLoading(true);
+    setReplayError('');
+    try {
+      const payload = await onReplayContext(turnAudit.user_message_index, null);
+      setReplay(payload);
+    } catch (error) {
+      console.error('Failed to rebuild context:', error);
+      setReplayError(error.message || 'Failed to rebuild context');
+    } finally {
+      setIsReplayLoading(false);
+    }
+  };
+
+  return (
+    <details className="context-audit-details">
+      <summary>
+        <span className="context-audit-title">Context</span>
+        <span className="context-audit-chip">{mode || 'mode unknown'}</span>
+        <span className="context-audit-chip">{included} history messages</span>
+        {summaryUsed && <span className="context-audit-chip">summary</span>}
+        {pinnedCount > 0 && <span className="context-audit-chip">{pinnedCount} pinned</span>}
+        {excludedCount > 0 && <span className="context-audit-chip">{excludedCount} excluded</span>}
+      </summary>
+
+      <div className="context-audit-grid">
+        <div>
+          <span className="context-audit-label">Status</span>
+          <strong>{status || 'recorded'}</strong>
+        </div>
+        <div>
+          <span className="context-audit-label">Budget</span>
+          <strong>{snapshot.estimated_context_tokens || 0} / {snapshot.budget_tokens || 0} tokens</strong>
+        </div>
+        <div>
+          <span className="context-audit-label">History</span>
+          <strong>{included} included, {omitted} omitted</strong>
+        </div>
+        <div>
+          <span className="context-audit-label">Current turn</span>
+          <strong>
+            {formatCount(currentTurn.text_attachment_count, 'file')}
+            {currentTurn.image_attachment_count ? `, ${formatCount(currentTurn.image_attachment_count, 'image')}` : ''}
+          </strong>
+        </div>
+        <div>
+          <span className="context-audit-label">Pinned</span>
+          <strong>{pinnedCount} included, {snapshot.omitted_pinned_messages || 0} omitted</strong>
+        </div>
+        <div>
+          <span className="context-audit-label">Excluded</span>
+          <strong>{excludedCount} excluded</strong>
+        </div>
+      </div>
+
+      {(currentTurn.file_names?.length > 0 || fileContexts.length > 0) && (
+        <div className="context-audit-files">
+          {currentTurn.file_names?.map(name => <span key={name}>{name}</span>)}
+          {fileContexts.map(fileContext => (
+            <span key={`${fileContext.filename}-chunks`}>
+              {fileContext.filename}: {fileContext.selected_chunks} / {fileContext.total_chunks} chunks
+            </span>
+          ))}
+        </div>
+      )}
+
+      {canReplay && (
+        <div className="context-replay-actions">
+          <button
+            type="button"
+            className="context-replay-button"
+            onClick={handleReplayContext}
+            disabled={isReplayLoading}
+          >
+            {isReplayLoading ? 'Rebuilding context...' : 'Rebuild context for this turn'}
+          </button>
+          {replay && (
+            <span className="context-replay-note">
+              {replay.replay_kind === 'saved_context_payload' ? 'saved payload' : 'current-policy rebuild'}, {replay.message_count || 0} messages
+            </span>
+          )}
+        </div>
+      )}
+
+      {replayError && <div className="context-replay-error">{replayError}</div>}
+
+      {replay && (
+        <div className="context-replay-panel">
+          <div className="context-replay-stats">
+            <span>mode {replay.mode || 'unknown'}</span>
+            <span>rebuilt {replay.rebuilt_snapshot?.estimated_context_tokens ?? replay.snapshot?.estimated_context_tokens ?? 0} tokens</span>
+            <span>saved {replay.saved_snapshot?.estimated_context_tokens ?? replay.snapshot?.estimated_context_tokens ?? snapshot.estimated_context_tokens ?? 0} tokens</span>
+            {replay.saved_status && <span>saved status {replay.saved_status}</span>}
+          </div>
+          {replay.comparison?.available && (
+            <div className="context-replay-drift">
+              <span>{replay.comparison.same_order ? 'same order' : 'order changed'}</span>
+              <span>{replay.comparison.same_message_set ? 'same messages' : 'message drift'}</span>
+              <span>saved-only {replay.comparison.saved_only_count || 0}</span>
+              <span>rebuilt-only {replay.comparison.rebuilt_only_count || 0}</span>
+              <span>token delta {replay.comparison.estimated_token_delta || 0}</span>
+              {replay.comparison.policy_changed && <span>policy changed</span>}
+            </div>
+          )}
+          <div className="context-replay-messages">
+            {(replay.messages || []).map((message, index) => (
+              <div className={`context-replay-message ${message.role || 'unknown'}`} key={`${message.role}-${message.source || 'context'}-${index}`}>
+                <div className="context-replay-role-row">
+                  <span className="context-replay-role">{message.role || 'message'}</span>
+                  {message.source && <span className="context-replay-source">{message.source}</span>}
+                  {typeof message.message_index === 'number' && (
+                    <span className="context-replay-source">#{message.message_index}</span>
+                  )}
+                </div>
+                <RichMarkdown content={message.content || ''} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {runs.length > 0 && (
+        <div className="context-run-list">
+          {runs.map((run, index) => (
+            <div className={`context-run-item ${run.status === 'failed' ? 'failed' : ''}`} key={`${run.stage}-${run.model}-${index}`}>
+              <span className="context-run-stage">{run.stage}</span>
+              <span className="context-run-model">{run.model || 'unknown model'}</span>
+              <span className="context-run-status">{run.status || 'recorded'}</span>
+              {run.usage?.total_tokens != null && (
+                <span className="context-run-usage">{run.usage.total_tokens} tokens</span>
+              )}
+              {run.error_type && <span className="context-run-error">{run.error_type}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </details>
+  );
+});
+
 // Memoized message item to prevent re-renders when typing
 const MessageItem = memo(function MessageItem({
   msg,
@@ -81,11 +263,34 @@ const MessageItem = memo(function MessageItem({
   onRetryQuery,
   onResumeQuery,
   onEditMessage,
+  onToggleMessagePin,
+  onToggleMessageContextExcluded,
+  onForkConversation,
+  onReplayMessageContext,
   isLastMessage,
   messageIndex,
+  turnAnchorRef,
+  messageAnchorRef,
+  turnAudit,
+  isHighlighted = false,
 }) {
   const isUserMessage = msg.role === 'user';
   const isQuickResponse = msg.metadata?.mode === 'quick';
+  const isPinned = Boolean(msg.pinned);
+  const isContextExcluded = Boolean(msg.context_excluded);
+  const pinLabel = isPinned ? 'Pinned' : 'Pin';
+  const contextToggleLabel = isContextExcluded ? 'Excluded' : 'Context';
+  const togglePin = () => onToggleMessagePin?.(messageIndex, !isPinned);
+  const toggleContextExcluded = () => onToggleMessageContextExcluded?.(messageIndex, !isContextExcluded);
+  const forkFromMessage = () => onForkConversation?.(messageIndex);
+  const contextSnapshot = msg.metadata?.context_snapshot || turnAudit?.context_snapshot;
+  const hasModelContext = !isUserMessage && Boolean(
+    contextSnapshot && (
+      contextSnapshot.included_history_messages > 0 ||
+      contextSnapshot.summary_used ||
+      contextSnapshot.raw_history_messages > 0
+    )
+  );
   const restoredStatusText = !isUserMessage && !isLoading && (
     msg.status === 'interrupted'
       ? 'This council run was interrupted. Completed stages were preserved.'
@@ -108,15 +313,18 @@ const MessageItem = memo(function MessageItem({
       msg.stage3?.status === 'failed'
     );
 
+  const groupRef = useCallback((node) => {
+    turnAnchorRef?.(node);
+    messageAnchorRef?.(node);
+  }, [turnAnchorRef, messageAnchorRef]);
+
   return (
-    <div className="message-group">
+    <div className={`message-group ${isHighlighted ? 'context-highlighted' : ''}`} ref={groupRef}>
       {/* Turn indicator for user messages */}
-      {isUserMessage && hasPreviousTurns && (
+      {isUserMessage && turnNumber > 1 && (
         <div className="turn-indicator">
           <span className="turn-number">Turn {turnNumber}</span>
-          <span className="turn-continuation">
-            {turnNumber === 1 ? 'Starting conversation' : 'Continuing conversation'}
-          </span>
+          <span className="turn-continuation">Continuing conversation</span>
         </div>
       )}
 
@@ -125,7 +333,29 @@ const MessageItem = memo(function MessageItem({
           <div className="message-label">
             <span className="role-icon">👤</span>
             <span>You</span>
-            {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
+            {turnNumber > 1 && <span className="turn-badge">{turnNumber}</span>}
+            {onToggleMessagePin && (
+              <button
+                type="button"
+                className={`pin-message-button ${isPinned ? 'active' : ''}`}
+                onClick={togglePin}
+                aria-pressed={isPinned}
+                title={isPinned ? 'Remove from pinned context' : 'Always include this message in context'}
+              >
+                {pinLabel}
+              </button>
+            )}
+            {onToggleMessageContextExcluded && (
+              <button
+                type="button"
+                className={`context-visibility-button ${isContextExcluded ? 'excluded' : ''}`}
+                onClick={toggleContextExcluded}
+                aria-pressed={isContextExcluded}
+                title={isContextExcluded ? 'Allow this message in future context' : 'Exclude this message from future context'}
+              >
+                {contextToggleLabel}
+              </button>
+            )}
           </div>
           <div className="message-content">
             {msg.files && msg.files.length > 0 && (
@@ -141,12 +371,21 @@ const MessageItem = memo(function MessageItem({
                 ))}
               </div>
             )}
-            <div className="markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-            </div>
+            <RichMarkdown content={contentToText(msg.content)} />
           </div>
           {!isLoading && (
             <div className="message-actions">
+              {onForkConversation && (
+                <button
+                  type="button"
+                  className="branch-message-button"
+                  onClick={forkFromMessage}
+                  title="Create a new conversation branch from this message"
+                  aria-label="Branch conversation from this message"
+                >
+                  Branch
+                </button>
+              )}
               <button
                 type="button"
                 className="edit-message-button"
@@ -164,11 +403,31 @@ const MessageItem = memo(function MessageItem({
           <div className="message-label">
             <span className="role-icon">🤖</span>
             <span>LLM Council</span>
-            {hasPreviousTurns && <span className="turn-badge">{turnNumber}</span>}
-            {hasPreviousTurns && (
-              <span className="context-indicator">
-                {turnNumber === 1 ? 'First response' : 'Context-aware response'}
-              </span>
+            {turnNumber > 1 && <span className="turn-badge">{turnNumber}</span>}
+            {hasModelContext && (
+              <span className="context-indicator">Context-aware response</span>
+            )}
+            {onToggleMessagePin && (
+              <button
+                type="button"
+                className={`pin-message-button ${isPinned ? 'active' : ''}`}
+                onClick={togglePin}
+                aria-pressed={isPinned}
+                title={isPinned ? 'Remove from pinned context' : 'Always include this response in context'}
+              >
+                {pinLabel}
+              </button>
+            )}
+            {onToggleMessageContextExcluded && (
+              <button
+                type="button"
+                className={`context-visibility-button ${isContextExcluded ? 'excluded' : ''}`}
+                onClick={toggleContextExcluded}
+                aria-pressed={isContextExcluded}
+                title={isContextExcluded ? 'Allow this response in future context' : 'Exclude this response from future context'}
+              >
+                {contextToggleLabel}
+              </button>
             )}
           </div>
           {restoredStatusText && (
@@ -218,7 +477,7 @@ const MessageItem = memo(function MessageItem({
                 rankings={msg.stage2}
                 labelToModel={msg.metadata?.label_to_model}
                 aggregateRankings={msg.metadata?.aggregate_rankings}
-                hasContext={hasPreviousTurns}
+                hasContext={hasModelContext}
               />
             </CollapsibleStage>
           )}
@@ -241,7 +500,13 @@ const MessageItem = memo(function MessageItem({
               <ModelStatusList statuses={msg.modelStatus?.stage3} />
             </div>
           )}
-          {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasPreviousTurns} />}
+          {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasModelContext} />}
+
+          <ContextAuditDetails
+            turnAudit={turnAudit}
+            fallbackSnapshot={contextSnapshot}
+            onReplayContext={onReplayMessageContext}
+          />
 
           {canContinueSavedStages && (
             <div className="message-actions">
@@ -267,6 +532,17 @@ const MessageItem = memo(function MessageItem({
           {/* Retry button for completed assistant messages */}
           {msg.stage3 && !canContinueSavedStages && !isLoading && isLastMessage && (
             <div className="message-actions">
+              {onForkConversation && (
+                <button
+                  type="button"
+                  className="branch-message-button"
+                  onClick={forkFromMessage}
+                  title="Create a new conversation branch from this response"
+                  aria-label="Branch conversation from this response"
+                >
+                  Branch
+                </button>
+              )}
               <button
                 className="retry-button"
                 onClick={onRetryQuery}
@@ -285,11 +561,25 @@ const MessageItem = memo(function MessageItem({
 
 export default function ChatInterface({
   conversation,
+  contextAudit,
+  contextPolicy,
+  onUpdateContextPolicy,
+  onAddContextMemory,
+  onUpdateContextMemory,
+  onDeleteContextMemory,
+  onSearchConversationHistory,
+  onPreviewContext,
+  onReplayMessageContext,
+  onClearContextSummary,
+  onRebuildContextSummary,
   onSendMessage,
   onSendQuickMessage,
   onStopQuery,
   onRetryQuery,
   onResumeQuery,
+  onToggleMessagePin,
+  onToggleMessageContextExcluded,
+  onForkConversation,
   isLoading,
   activeStreamId,
   attachedFiles,
@@ -300,22 +590,16 @@ export default function ChatInterface({
   onDraftRestored,
 }) {
   const [input, setInput] = useState('');
+  const [contextPreview, setContextPreview] = useState(null);
+  const [contextPreviewError, setContextPreviewError] = useState('');
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-
-  const messageContentToText = useCallback((content) => {
-    if (typeof content === 'string') {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .filter(item => item?.type === 'text')
-        .map(item => item.text || '')
-        .join('\n')
-        .trim();
-    }
-    return '';
-  }, []);
+  const turnAnchorsRef = useRef(new Map());
+  const messageAnchorsRef = useRef(new Map());
+  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
+  const [highlightedMessageIndex, setHighlightedMessageIndex] = useState(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -324,6 +608,11 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [conversation]);
+
+  useEffect(() => {
+    setContextPreview(null);
+    setContextPreviewError('');
+  }, [conversation?.id]);
 
   // Memoize context calculation to avoid re-computing on every render
   const conversationContext = useMemo(() => {
@@ -392,12 +681,112 @@ export default function ChatInterface({
     return {
       recentMessages,
       totalMessages: conversation.messages.length,
-      turnCount: turns.length,
+      turnCount: contextAudit?.turn_count ?? turns.length,
+      visibleTurnCount: turns.length,
       isInProgress
     };
-  }, [conversation]);
+  }, [conversation, contextAudit]);
 
   const hasPreviousTurns = conversationContext && conversationContext.turnCount > 0;
+
+  const turnAuditByAssistantIndex = useMemo(() => {
+    const entries = new Map();
+    for (const turn of contextAudit?.turns || []) {
+      if (typeof turn.assistant_message_index === 'number') {
+        entries.set(turn.assistant_message_index, turn);
+      }
+    }
+    return entries;
+  }, [contextAudit]);
+
+  const latestTurnAudit = useMemo(() => {
+    const turns = contextAudit?.turns || [];
+    return turns.length > 0 ? turns[turns.length - 1] : null;
+  }, [contextAudit]);
+
+  const turnEntries = useMemo(() => {
+    if (!conversation?.messages) return [];
+    return conversation.messages
+      .map((msg, index) => ({
+        messageIndex: index,
+        turnNumber: Math.floor(index / 2) + 1,
+        role: msg.role,
+      }))
+      .filter(entry => entry.role === 'user');
+  }, [conversation]);
+
+  const showTurnNavigator = turnEntries.length > 1;
+  const boundedCurrentTurnIndex = Math.max(0, Math.min(currentTurnIndex, turnEntries.length - 1));
+
+  useEffect(() => {
+    turnAnchorsRef.current.clear();
+    messageAnchorsRef.current.clear();
+    setHighlightedMessageIndex(null);
+  }, [conversation?.id]);
+
+  const registerTurnAnchor = useCallback((messageIndex, node) => {
+    if (node) {
+      turnAnchorsRef.current.set(messageIndex, node);
+    } else {
+      turnAnchorsRef.current.delete(messageIndex);
+    }
+  }, []);
+
+  const registerMessageAnchor = useCallback((messageIndex, node) => {
+    if (node) {
+      messageAnchorsRef.current.set(messageIndex, node);
+    } else {
+      messageAnchorsRef.current.delete(messageIndex);
+    }
+  }, []);
+
+  const scrollToMessage = useCallback((messageIndex) => {
+    const anchor = messageAnchorsRef.current.get(messageIndex);
+    if (!anchor) return;
+
+    anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setHighlightedMessageIndex(messageIndex);
+    window.setTimeout(() => {
+      setHighlightedMessageIndex(current => (current === messageIndex ? null : current));
+    }, 1600);
+  }, []);
+
+  const scrollToTurn = useCallback((nextIndex) => {
+    const boundedIndex = Math.max(0, Math.min(nextIndex, turnEntries.length - 1));
+    const entry = turnEntries[boundedIndex];
+    if (!entry) return;
+
+    const anchor = turnAnchorsRef.current.get(entry.messageIndex);
+    anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setCurrentTurnIndex(boundedIndex);
+  }, [turnEntries]);
+
+  const scrollMessagesToTop = useCallback(() => {
+    messagesContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    setCurrentTurnIndex(0);
+  }, []);
+
+  const scrollMessagesToBottom = useCallback(() => {
+    scrollToBottom();
+    setCurrentTurnIndex(Math.max(0, turnEntries.length - 1));
+  }, [turnEntries.length]);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container || turnEntries.length === 0) return;
+
+    const containerTop = container.getBoundingClientRect().top;
+    let activeIndex = 0;
+    turnEntries.forEach((entry, index) => {
+      const anchor = turnAnchorsRef.current.get(entry.messageIndex);
+      if (!anchor) return;
+      if (anchor.getBoundingClientRect().top - containerTop <= 96) {
+        activeIndex = index;
+      }
+    });
+
+    setCurrentTurnIndex(prev => (prev === activeIndex ? prev : activeIndex));
+  }, [turnEntries]);
 
   const adjustInputHeight = useCallback(() => {
     const textarea = inputRef.current;
@@ -478,6 +867,8 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
       onSendMessage(input, attachedFiles);
       setInput('');
+      setContextPreview(null);
+      setContextPreviewError('');
       // App clears sent files after a successful response.
     }
   }, [input, attachedFiles, isLoading, onSendMessage]);
@@ -487,18 +878,35 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
       onSendQuickMessage(input, attachedFiles);
       setInput('');
+      setContextPreview(null);
+      setContextPreviewError('');
       // App clears sent files after a successful response.
     }
   }, [input, attachedFiles, isLoading, onSendQuickMessage]);
 
+  const handlePreviewContext = useCallback(async (mode) => {
+    if (!onPreviewContext || isLoading || isPreviewLoading) return;
+    setIsPreviewLoading(true);
+    setContextPreviewError('');
+    try {
+      const preview = await onPreviewContext(input, attachedFiles, mode);
+      setContextPreview(preview);
+    } catch (error) {
+      console.error('Failed to preview context:', error);
+      setContextPreviewError(error.message || 'Failed to preview context');
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  }, [attachedFiles, input, isLoading, isPreviewLoading, onPreviewContext]);
+
   const handleEditMessage = useCallback((msg) => {
-    const text = messageContentToText(msg.content);
+    const text = contentToText(msg.content);
     setInput(text);
     window.requestAnimationFrame(() => {
       inputRef.current?.focus();
       adjustInputHeight();
     });
-  }, [adjustInputHeight, messageContentToText]);
+  }, [adjustInputHeight]);
 
   const handleKeyDown = useCallback((e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -540,7 +948,7 @@ export default function ChatInterface({
 
   return (
     <div className="chat-interface">
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Start a conversation</h2>
@@ -553,8 +961,20 @@ export default function ChatInterface({
               <div className="conversation-section">
                 <ConversationContext
                   recentMessages={conversationContext.recentMessages}
+                  contextAudit={contextAudit}
+                  contextPolicy={contextPolicy}
+                  onUpdateContextPolicy={onUpdateContextPolicy}
+                  onAddContextMemory={onAddContextMemory}
+                  onUpdateContextMemory={onUpdateContextMemory}
+                  onDeleteContextMemory={onDeleteContextMemory}
+                  onSearchConversationHistory={onSearchConversationHistory}
+                  onClearContextSummary={onClearContextSummary}
+                  onRebuildContextSummary={onRebuildContextSummary}
+                  nextContextPreview={contextPreview}
+                  latestTurn={latestTurnAudit}
                   totalMessages={conversationContext.totalMessages}
                   isInProgress={conversationContext.isInProgress}
+                  onJumpToMessage={scrollToMessage}
                 />
               </div>
             )}
@@ -572,12 +992,50 @@ export default function ChatInterface({
                   onRetryQuery={onRetryQuery}
                   onResumeQuery={onResumeQuery}
                   onEditMessage={handleEditMessage}
+                  onToggleMessagePin={isLoading ? null : onToggleMessagePin}
+                  onToggleMessageContextExcluded={isLoading ? null : onToggleMessageContextExcluded}
+                  onForkConversation={isLoading ? null : onForkConversation}
+                  onReplayMessageContext={isLoading ? null : onReplayMessageContext}
                   isLastMessage={index === conversation.messages.length - 1}
                   messageIndex={index}
+                  turnAnchorRef={msg.role === 'user' ? (node) => registerTurnAnchor(index, node) : undefined}
+                  messageAnchorRef={(node) => registerMessageAnchor(index, node)}
+                  turnAudit={msg.role === 'assistant' ? turnAuditByAssistantIndex.get(index) : null}
+                  isHighlighted={highlightedMessageIndex === index}
                 />
               ))}
             </div>
           </>
+        )}
+
+        {showTurnNavigator && (
+          <div className="turn-navigator" aria-label="Turn navigation">
+            <button
+              type="button"
+              className="turn-nav-button"
+              onClick={() => scrollToTurn(boundedCurrentTurnIndex - 1)}
+              disabled={boundedCurrentTurnIndex <= 0}
+            >
+              ↑ Prev Turn
+            </button>
+            <span className="turn-nav-status">
+              Turn {turnEntries[boundedCurrentTurnIndex]?.turnNumber || 1} / {turnEntries.length}
+            </span>
+            <button
+              type="button"
+              className="turn-nav-button"
+              onClick={() => scrollToTurn(boundedCurrentTurnIndex + 1)}
+              disabled={boundedCurrentTurnIndex >= turnEntries.length - 1}
+            >
+              ↓ Next Turn
+            </button>
+            <button type="button" className="turn-nav-button compact" onClick={scrollMessagesToTop}>
+              Top
+            </button>
+            <button type="button" className="turn-nav-button compact" onClick={scrollMessagesToBottom}>
+              Bottom
+            </button>
+          </div>
         )}
 
         {isLoading && (
@@ -603,7 +1061,29 @@ export default function ChatInterface({
             <span className="hint-text">
               Your next message will include {conversationContext.turnCount} previous turns of context
             </span>
+            {onPreviewContext && (
+              <div className="context-preview-actions">
+                <button
+                  type="button"
+                  onClick={() => handlePreviewContext('council')}
+                  disabled={isPreviewLoading}
+                >
+                  {isPreviewLoading ? 'Previewing...' : 'Preview Council'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePreviewContext('quick')}
+                  disabled={isPreviewLoading || !onSendQuickMessage}
+                >
+                  Preview Quick
+                </button>
+              </div>
+            )}
           </div>
+        )}
+
+        {contextPreviewError && (
+          <div className="context-preview-error">{contextPreviewError}</div>
         )}
 
         <form className="input-form" onSubmit={handleSubmit}>

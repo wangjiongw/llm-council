@@ -1,0 +1,307 @@
+.rich-markdown {
+  color: inherit;
+}
+
+.rich-markdown-compact {
+  padding: 0;
+  overflow: hidden;
+}
+
+.rich-markdown-compact p {
+  margin: 0;
+}
+
+.rich-code-block,
+.rich-mermaid-block,
+.rich-math-block {
+  margin: 0 0 14px;
+  overflow: hidden;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--code-header-bg);
+}
+
+.rich-code-header,
+.rich-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-header-bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.rich-copy {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-bg);
+  color: var(--code-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.rich-copy:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.rich-copy.copied {
+  border-color: #1a7f37;
+  background: #dafbe1;
+  color: #116329;
+}
+
+.rich-code {
+  margin: 0;
+  max-height: 520px;
+  overflow: auto;
+  padding: 14px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.rich-code code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+
+
+.rich-code-block.plain-code .rich-code {
+  background: var(--code-header-bg);
+  color: var(--code-text);
+}
+
+.code-token-keyword {
+  color: var(--code-token-keyword);
+  font-weight: 700;
+}
+
+.code-token-string {
+  color: var(--code-token-string);
+}
+
+.code-token-comment {
+  color: var(--code-token-comment);
+  font-style: italic;
+}
+
+.rich-mermaid-placeholder {
+  padding: 14px;
+  color: var(--text-muted);
+  background: var(--surface-bg);
+  font-size: 13px;
+}
+
+.rich-mermaid-source {
+  max-height: 300px;
+}
+
+.rich-math-block code {
+  display: block;
+  padding: 14px;
+  overflow-x: auto;
+  background: var(--surface-bg);
+  color: var(--code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+}
+
+.rich-table-wrap {
+  margin: 0 0 16px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-bg);
+}
+
+.rich-table-actions {
+  justify-content: flex-start;
+  text-transform: none;
+}
+
+.rich-table-actions span {
+  margin-right: auto;
+  text-transform: uppercase;
+}
+
+.rich-table-scroll {
+  overflow: auto;
+  max-height: 520px;
+}
+
+.rich-table-scroll table {
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.rich-image-button {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.rich-image-button img {
+  display: block;
+  max-width: min(100%, 760px);
+  max-height: 520px;
+  border-radius: 8px;
+}
+
+.rich-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+  cursor: zoom-out;
+}
+
+.rich-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  background: var(--surface-bg);
+}
+
+.rich-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.rich-runtime-status {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.rich-code .hljs {
+  background: transparent;
+  color: inherit;
+}
+
+.rich-mermaid-placeholder.error,
+.rich-math-fallback.error {
+  color: #cf222e;
+}
+
+.rich-math-rendered {
+  overflow-x: auto;
+  padding: 16px;
+  background: var(--surface-bg);
+  color: var(--code-text);
+}
+
+.rich-math-rendered .katex-display {
+  margin: 0;
+}
+
+.rich-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  vertical-align: -0.15em;
+}
+
+.rich-math-inline-fallback {
+  white-space: nowrap;
+}
+
+.rich-math-fallback {
+  display: block;
+  padding: 14px;
+  overflow-x: auto;
+  background: var(--surface-bg);
+  color: var(--code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre;
+}
+
+.rich-mermaid-source code {
+  color: inherit;
+}
+
+.rich-markdown-streaming .rich-code,
+.rich-markdown-compact .rich-code {
+  max-height: 220px;
+}
+
+.rich-markdown-compact .rich-code-block,
+.rich-markdown-compact .rich-mermaid-block,
+.rich-markdown-compact .rich-math-block,
+.rich-markdown-compact .rich-table-wrap {
+  margin: 0;
+}
+
+.rich-mermaid-rendered {
+  overflow: auto;
+  padding: 16px;
+  background: var(--surface-bg);
+}
+
+.rich-mermaid-rendered svg {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  min-width: 320px;
+  height: auto;
+  margin: 0 auto;
+}
+
+
+.rich-code .hljs-keyword,
+.rich-code .hljs-selector-tag,
+.rich-code .hljs-built_in,
+.rich-code .hljs-name {
+  color: var(--code-token-keyword);
+}
+
+.rich-code .hljs-string,
+.rich-code .hljs-attr,
+.rich-code .hljs-symbol,
+.rich-code .hljs-bullet {
+  color: var(--code-token-string);
+}
+
+.rich-code .hljs-comment,
+.rich-code .hljs-quote {
+  color: var(--code-token-comment);
+  font-style: italic;
+}
+
+.rich-code .hljs-title,
+.rich-code .hljs-section,
+.rich-code .hljs-function {
+  color: var(--code-token-title);
+}
+
+.rich-code .hljs-number,
+.rich-code .hljs-literal,
+.rich-code .hljs-variable,
+.rich-code .hljs-template-variable {
+  color: var(--code-token-number);
+}

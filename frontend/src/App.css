@@ -1,3 +1,59 @@
+:root {
+  --app-bg: #ffffff;
+  --app-text: #333333;
+  --sidebar-bg: #f8f8f8;
+  --surface-bg: #ffffff;
+  --surface-muted: #f6f8fa;
+  --surface-soft: #fafafa;
+  --border-color: #e0e0e0;
+  --text-muted: #666666;
+  --text-subtle: #999999;
+  --primary: #4a90e2;
+  --primary-hover: #357abd;
+  --primary-soft: #e8f0fe;
+  --user-message-bg: #f0f7ff;
+  --user-message-border: #d0e7ff;
+  --code-bg: #f6f8fa;
+  --code-text: #24292f;
+  --code-header-bg: #f6f8fa;
+  --code-border: #d8dee4;
+  --code-token-keyword: #cf222e;
+  --code-token-string: #0a3069;
+  --code-token-comment: #6e7781;
+  --code-token-title: #8250df;
+  --code-token-number: #0550ae;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --app-bg: #0d1117;
+  --app-text: #c9d1d9;
+  --sidebar-bg: #161b22;
+  --surface-bg: #0d1117;
+  --surface-muted: #161b22;
+  --surface-soft: #111820;
+  --border-color: #30363d;
+  --text-muted: #8b949e;
+  --text-subtle: #6e7681;
+  --primary: #58a6ff;
+  --primary-hover: #79c0ff;
+  --primary-soft: #102a43;
+  --user-message-bg: #102a43;
+  --user-message-border: #1f6feb;
+  --code-bg: #0d1117;
+  --code-text: #c9d1d9;
+  --code-header-bg: #161b22;
+  --code-border: #30363d;
+  --code-token-keyword: #ff7b72;
+  --code-token-string: #a5d6ff;
+  --code-token-comment: #8b949e;
+  --code-token-title: #d2a8ff;
+  --code-token-number: #79c0ff;
+}
+
+:root[data-theme='dark'] body {
+  background: var(--app-bg);
+}
 * {
   box-sizing: border-box;
 }
@@ -6,10 +62,139 @@
   display: flex;
   height: 100vh;
   width: 100vw;
+  min-width: 0;
   overflow: hidden;
-  background: #ffffff;
-  color: #333;
+  background: var(--app-bg);
+  color: var(--app-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
+}
+
+
+:root[data-theme='dark'] .markdown-content pre,
+:root[data-theme='dark'] .markdown-content code,
+:root[data-theme='dark'] .markdown-content table,
+:root[data-theme='dark'] .markdown-content th,
+:root[data-theme='dark'] .markdown-content tr:nth-child(even),
+:root[data-theme='dark'] .markdown-content tr:hover,
+:root[data-theme='dark'] .markdown-content td code,
+:root[data-theme='dark'] .markdown-content th code {
+  background: var(--surface-muted);
+  color: var(--app-text);
+}
+
+:root[data-theme='dark'] .markdown-content th,
+:root[data-theme='dark'] .markdown-content td {
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .markdown-content blockquote,
+:root[data-theme='dark'] .markdown-content table caption {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .stage,
+:root[data-theme='dark'] .stage2,
+:root[data-theme='dark'] .stage3,
+:root[data-theme='dark'] .tab-content,
+:root[data-theme='dark'] .stage2 .tab-content,
+:root[data-theme='dark'] .final-response,
+:root[data-theme='dark'] .aggregate-rankings,
+:root[data-theme='dark'] .aggregate-item {
+  background: var(--surface-muted);
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .stage-title,
+:root[data-theme='dark'] .stage2 h4,
+:root[data-theme='dark'] .response-text,
+:root[data-theme='dark'] .ranking-content,
+:root[data-theme='dark'] .final-text,
+:root[data-theme='dark'] .rank-model,
+:root[data-theme='dark'] .parsed-ranking ol {
+  color: var(--app-text);
+}
+
+:root[data-theme='dark'] .stage-description,
+:root[data-theme='dark'] .rank-score,
+:root[data-theme='dark'] .model-name,
+:root[data-theme='dark'] .ranking-model,
+:root[data-theme='dark'] .rank-count {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .tab,
+:root[data-theme='dark'] .stage2 .tab,
+:root[data-theme='dark'] .copy-button {
+  background: var(--surface-bg);
+  border-color: var(--border-color);
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .tab:hover,
+:root[data-theme='dark'] .stage2 .tab:hover,
+:root[data-theme='dark'] .copy-button:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+:root[data-theme='dark'] .tab.active,
+:root[data-theme='dark'] .stage2 .tab.active {
+  background: var(--surface-bg);
+  border-color: var(--primary);
+  border-bottom-color: var(--surface-bg);
+  color: var(--primary);
+}
+
+:root[data-theme='dark'] .parsed-ranking {
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .settings-modal,
+:root[data-theme='dark'] .settings-section,
+:root[data-theme='dark'] .override-row {
+  background: var(--surface-bg);
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .settings-modal-header,
+:root[data-theme='dark'] .settings-modal-footer {
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .settings-modal-header h2,
+:root[data-theme='dark'] .settings-section h3,
+:root[data-theme='dark'] .override-row span {
+  color: var(--app-text);
+}
+
+:root[data-theme='dark'] .settings-modal-header p,
+:root[data-theme='dark'] .settings-section label,
+:root[data-theme='dark'] .override-row small,
+:root[data-theme='dark'] .settings-status {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .settings-close-btn,
+:root[data-theme='dark'] .settings-section input,
+:root[data-theme='dark'] .settings-section textarea,
+:root[data-theme='dark'] .settings-test-row input,
+:root[data-theme='dark'] .override-row button,
+:root[data-theme='dark'] .settings-secondary-btn,
+:root[data-theme='dark'] .title-input {
+  background: var(--surface-muted);
+  border-color: var(--border-color);
+  color: var(--app-text);
+}
+
+:root[data-theme='dark'] .file-drop-zone,
+:root[data-theme='dark'] .file-queue-item,
+:root[data-theme='dark'] .file-bubble,
+:root[data-theme='dark'] .file-queue-summary {
+  background: var(--surface-muted);
+  border-color: var(--border-color);
+  color: var(--app-text);
 }

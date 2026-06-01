@@ -1,6 +1,5 @@
 import { useState, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import RichMarkdown from './RichMarkdown';
 import './Stage1.css';
 
 const CopyButton = ({ content, onCopy }) => {
@@ -93,9 +92,7 @@ function Stage1({ responses }) {
         {isFailed ? (
           <pre className="failure-details">{failureDetails}</pre>
         ) : (
-          <div className="response-text markdown-content">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeResponse.response}</ReactMarkdown>
-          </div>
+          <RichMarkdown content={activeResponse.response} className="response-text" />
         )}
       </div>
     </div>

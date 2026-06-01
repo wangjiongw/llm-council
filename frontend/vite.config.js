@@ -8,6 +8,9 @@ const backendTarget = process.env.VITE_API_PROXY_TARGET || `http://${backendHost
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    chunkSizeWarningLimit: 700,
+  },
   server: {
     proxy: {
       '/api': {

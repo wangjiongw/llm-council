@@ -3,18 +3,33 @@ import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import LLMSettingsModal from './components/LLMSettingsModal';
 import { api } from './api';
+import { processUploadedFiles } from './utils/fileUtils';
 import './App.css';
+
+const THEME_STORAGE_KEY = 'llm-council-theme';
 
 function App() {
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
+  const [currentContextAudit, setCurrentContextAudit] = useState(null);
+  const [currentContextPolicy, setCurrentContextPolicy] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeStreamId, setActiveStreamId] = useState(null);
   const [inFlightDraft, setInFlightDraft] = useState(null);
   const [draftToRestore, setDraftToRestore] = useState(null);
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || 'light');
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
+  };
 
   // Load conversations on mount
   useEffect(() => {
@@ -28,18 +43,33 @@ function App() {
     })();
   }, []);
 
+  const loadConversationDetails = async (conversationId) => {
+    if (!conversationId) {
+      setCurrentConversation(null);
+      setCurrentContextAudit(null);
+      setCurrentContextPolicy(null);
+      return;
+    }
+
+    try {
+      const [conv, audit] = await Promise.all([
+        api.getConversation(conversationId),
+        api.getConversationContext(conversationId).catch((error) => {
+          console.warn('Failed to load conversation context audit:', error);
+          return null;
+        }),
+      ]);
+      setCurrentConversation(conv);
+      setCurrentContextAudit(audit);
+      setCurrentContextPolicy(audit?.context_policy || conv.context_policy || null);
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+    }
+  };
+
   // Load conversation details when selected
   useEffect(() => {
-    (async () => {
-      if (currentConversationId) {
-        try {
-          const conv = await api.getConversation(currentConversationId);
-          setCurrentConversation(conv);
-        } catch (error) {
-          console.error('Failed to load conversation:', error);
-        }
-      }
-    })();
+    loadConversationDetails(currentConversationId);
   }, [currentConversationId]);
 
   const handleNewConversation = async () => {
@@ -56,6 +86,8 @@ function App() {
       ]);
       setCurrentConversationId(newConv.id);
       setAttachedFiles([]); // Clear file queue for new conversation
+      setCurrentContextAudit(null);
+      setCurrentContextPolicy(newConv.context_policy || null);
     } catch (error) {
       console.error('Failed to create conversation:', error);
     }
@@ -63,6 +95,8 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+    setCurrentContextAudit(null);
+    setCurrentContextPolicy(null);
     setAttachedFiles([]);
   };
 
@@ -90,6 +124,168 @@ function App() {
     } catch (error) {
       console.error('Failed to update title:', error);
       alert('Failed to update title. Please try again.');
+    }
+  };
+
+  const handleUpdateContextPolicy = async (policyUpdates) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.updateContextPolicy(currentConversationId, policyUpdates);
+      const policy = response.context_policy;
+      setCurrentContextPolicy(policy);
+      setCurrentConversation(prev => prev ? { ...prev, context_policy: policy } : prev);
+      setCurrentContextAudit(prev => prev ? { ...prev, context_policy: policy } : prev);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to update context policy:', error);
+      alert('Failed to update context policy. Please try again.');
+    }
+  };
+
+  const applyContextMemory = (contextMemory) => {
+    setCurrentConversation(prev => prev ? { ...prev, context_memory: contextMemory } : prev);
+    setCurrentContextAudit(prev => prev ? { ...prev, context_memory: contextMemory } : prev);
+  };
+
+  const handleAddContextMemory = async (content) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.addContextMemory(currentConversationId, content, true);
+      applyContextMemory(response.context_memory || []);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to add context memory:', error);
+      alert('Failed to add memory. Please try again.');
+    }
+  };
+
+  const handleUpdateContextMemory = async (memoryId, updates) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.updateContextMemory(currentConversationId, memoryId, updates);
+      applyContextMemory(response.context_memory || []);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to update context memory:', error);
+      alert('Failed to update memory. Please try again.');
+    }
+  };
+
+  const handleDeleteContextMemory = async (memoryId) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.deleteContextMemory(currentConversationId, memoryId);
+      applyContextMemory(response.context_memory || []);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to delete context memory:', error);
+      alert('Failed to delete memory. Please try again.');
+    }
+  };
+
+  const handlePreviewContext = async (content, files, mode) => {
+    if (!currentConversationId) return null;
+    return api.previewConversationContext(currentConversationId, content, mode, files || []);
+  };
+
+  const handleSearchConversationHistory = async (query) => {
+    const response = await api.searchConversationHistory(query, 20);
+    return response.results || [];
+  };
+
+
+  const handleReplayMessageContext = async (messageIndex, mode = null) => {
+    if (!currentConversationId) return null;
+    return api.replayMessageContext(currentConversationId, messageIndex, mode);
+  };
+
+  const applyContextSummary = (summary) => {
+    setCurrentConversation(prev => prev ? { ...prev, context_summary: summary } : prev);
+    setCurrentContextAudit(prev => prev ? { ...prev, context_summary: summary } : prev);
+  };
+
+  const handleClearContextSummary = async () => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.clearContextSummary(currentConversationId);
+      applyContextSummary(response.context_summary);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to clear context summary:', error);
+      alert('Failed to clear context summary. Please try again.');
+    }
+  };
+
+  const handleRebuildContextSummary = async () => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.rebuildContextSummary(currentConversationId);
+      applyContextSummary(response.context_summary);
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to rebuild context summary:', error);
+      alert('Failed to rebuild context summary. Please try again.');
+    }
+  };
+
+  const handleForkConversation = async (messageIndex) => {
+    if (!currentConversationId || isLoading) return;
+
+    try {
+      const branch = await api.forkConversation(currentConversationId, messageIndex);
+      setConversations(prevConversations => [
+        {
+          id: branch.id,
+          created_at: branch.created_at,
+          message_count: branch.messages?.length || 0,
+          title: branch.title || 'Branched Conversation',
+        },
+        ...prevConversations,
+      ]);
+      setCurrentConversationId(branch.id);
+      setCurrentConversation(branch);
+      setCurrentContextAudit(null);
+      setCurrentContextPolicy(branch.context_policy || null);
+      setAttachedFiles([]);
+    } catch (error) {
+      console.error('Failed to branch conversation:', error);
+      alert('Failed to branch conversation. Please try again.');
+    }
+  };
+
+  const handleToggleMessagePin = async (messageIndex, pinned) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.setMessagePinned(currentConversationId, messageIndex, pinned);
+      if (response.conversation) {
+        setCurrentConversation(response.conversation);
+      }
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to update message pin:', error);
+      alert('Failed to update message pin. Please try again.');
+    }
+  };
+
+  const handleToggleMessageContextExcluded = async (messageIndex, excluded) => {
+    if (!currentConversationId) return;
+
+    try {
+      const response = await api.setMessageContextExcluded(currentConversationId, messageIndex, excluded);
+      if (response.conversation) {
+        setCurrentConversation(response.conversation);
+      }
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to update message context visibility:', error);
+      alert('Failed to update message context visibility. Please try again.');
     }
   };
 
@@ -167,7 +363,6 @@ function App() {
 
   // File upload handler
   const handleFileUpload = async (newFiles) => {
-    const { processUploadedFiles } = await import('./utils/fileUtils');
     try {
       const processedFiles = await processUploadedFiles(newFiles, attachedFiles);
       setAttachedFiles(prev => [...prev, ...processedFiles]);
@@ -213,46 +408,68 @@ function App() {
     }
   };
 
-  const handleRetryLastQuery = () => {
-    if (!currentConversation || !currentConversation.messages) return;
+  const handleRetryLastQuery = async () => {
+    if (!currentConversationId || !currentConversation?.messages || isLoading) return;
 
-    // Find the last user message
     const messages = [...currentConversation.messages];
     let lastUserMessage = null;
+    let lastUserIndex = -1;
 
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
         lastUserMessage = messages[i];
+        lastUserIndex = i;
         break;
       }
     }
 
-    if (!lastUserMessage) {
+    if (!lastUserMessage || lastUserIndex < 0) {
       console.error('No user message found to retry');
       return;
     }
 
-    // Remove the last assistant message (if it exists)
-    const lastMessage = messages[messages.length - 1];
-    const retryQuick = lastMessage?.role === 'assistant' && lastMessage.metadata?.mode === 'quick';
-    let updatedMessages = [...messages];
+    const nextAssistant = messages.slice(lastUserIndex + 1).find(msg => msg.role === 'assistant');
+    const retryMode = nextAssistant?.metadata?.mode === 'quick' ? 'quick' : 'council';
 
-    if (lastMessage && lastMessage.role === 'assistant') {
-      // Remove the last assistant message
-      updatedMessages = updatedMessages.slice(0, -1);
-    }
+    setIsLoading(true);
+    const requestId = `retry-${Date.now()}`;
+    setActiveStreamId(requestId);
+    setInFlightDraft(null);
+    setDraftToRestore(null);
 
-    // Update the conversation state without the assistant message
     setCurrentConversation((prev) => ({
       ...prev,
-      messages: updatedMessages
+      messages: prev.messages.slice(0, lastUserIndex + 1),
     }));
 
-    // Send the last user message again using the same mode.
-    if (retryQuick) {
-      handleSendQuickMessage(lastUserMessage.content);
-    } else {
-      handleSendMessage(lastUserMessage.content);
+    try {
+      const response = await api.retryMessage(currentConversationId, lastUserIndex, retryMode);
+      if (response.conversation) {
+        setCurrentConversation(response.conversation);
+      } else {
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              role: 'assistant',
+              stage1: response.stage1_results,
+              stage2: response.stage2_results,
+              stage3: response.stage3_result,
+              metadata: response.metadata,
+            },
+          ],
+        }));
+      }
+      loadConversations();
+      await loadConversationDetails(currentConversationId);
+    } catch (error) {
+      console.error('Failed to retry message:', error);
+      await loadConversationDetails(currentConversationId);
+    } finally {
+      setIsLoading(false);
+      setActiveStreamId(null);
+      setInFlightDraft(null);
     }
   };
 
@@ -390,8 +607,9 @@ function App() {
         break;
 
       case 'complete':
-        // Stream complete, reload conversations list
+        // Stream complete, reload conversations list and persisted turn audit.
         loadConversations();
+        loadConversationDetails(currentConversationId);
         setIsLoading(false);
         setActiveStreamId(null);
         setInFlightDraft(null);
@@ -406,6 +624,7 @@ function App() {
           lastMsg.loading.stage2 = false;
           lastMsg.loading.stage3 = false;
         });
+        loadConversationDetails(currentConversationId);
         setIsLoading(false);
         setActiveStreamId(null);
         setInFlightDraft(null);
@@ -475,8 +694,9 @@ function App() {
         // the message; the pending queue is cleared after success.
         setAttachedFiles([]);
 
-        // Reload conversations list
+        // Reload conversations list and persisted turn audit.
         loadConversations();
+        await loadConversationDetails(currentConversationId);
         setIsLoading(false);
         setActiveStreamId(null);
         setInFlightDraft(null);
@@ -564,6 +784,7 @@ function App() {
         });
       }
     } finally {
+      await loadConversationDetails(currentConversationId);
       setIsLoading(false);
       setActiveStreamId(null);
       setInFlightDraft(null);
@@ -656,8 +877,9 @@ function App() {
         });
       }
 
-      // Reload conversations list
+      // Reload conversations list and persisted turn audit.
       loadConversations();
+      await loadConversationDetails(currentConversationId);
     } catch (error) {
       console.error('Failed to send quick message:', error);
 
@@ -706,14 +928,30 @@ function App() {
         onUpdateTitle={handleUpdateTitle}
         onDeleteConversation={handleDeleteConversation}
         onOpenSettings={() => setSettingsOpen(true)}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
       <ChatInterface
         conversation={currentConversation}
+        contextAudit={currentContextAudit}
+        contextPolicy={currentContextPolicy}
+        onUpdateContextPolicy={handleUpdateContextPolicy}
+        onAddContextMemory={handleAddContextMemory}
+        onUpdateContextMemory={handleUpdateContextMemory}
+        onDeleteContextMemory={handleDeleteContextMemory}
+        onSearchConversationHistory={handleSearchConversationHistory}
+        onPreviewContext={handlePreviewContext}
+        onReplayMessageContext={handleReplayMessageContext}
+        onClearContextSummary={handleClearContextSummary}
+        onRebuildContextSummary={handleRebuildContextSummary}
         onSendMessage={handleSendMessage}
         onSendQuickMessage={handleSendQuickMessage}
         onStopQuery={handleStopQuery}
         onRetryQuery={handleRetryLastQuery}
         onResumeQuery={handleResumeSavedStages}
+        onToggleMessagePin={handleToggleMessagePin}
+        onToggleMessageContextExcluded={handleToggleMessageContextExcluded}
+        onForkConversation={handleForkConversation}
         isLoading={isLoading}
         activeStreamId={activeStreamId}
         attachedFiles={attachedFiles}
