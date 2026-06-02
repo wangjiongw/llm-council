@@ -24,6 +24,14 @@ const contentToText = (content) => {
   return '';
 };
 
+const DRAFT_STORAGE_PREFIX = 'llm-council:draft:';
+const LONG_USER_MESSAGE_CHARS = 2200;
+const LONG_USER_MESSAGE_LINES = 44;
+
+const isLongText = (text, maxChars, maxLines) => (
+  text.length > maxChars || text.split('\n').length > maxLines
+);
+
 // Collapsible section component for Stage 1 and Stage 2
 const CollapsibleStage = memo(function CollapsibleStage({
   title,
@@ -398,6 +406,10 @@ const MessageItem = memo(function MessageItem({
   const isContextExcluded = Boolean(msg.context_excluded);
   const pinLabel = isPinned ? 'Pinned' : 'Pin';
   const contextToggleLabel = isContextExcluded ? 'Excluded' : 'Context';
+  const userText = isUserMessage ? contentToText(msg.content) : '';
+  const userMessageIsLong = isUserMessage && isLongText(userText, LONG_USER_MESSAGE_CHARS, LONG_USER_MESSAGE_LINES);
+  const [isUserExpanded, setIsUserExpanded] = useState(false);
+  const isUserCollapsed = userMessageIsLong && !isUserExpanded;
   const togglePin = () => onToggleMessagePin?.(messageIndex, !isPinned);
   const toggleContextExcluded = () => onToggleMessageContextExcluded?.(messageIndex, !isContextExcluded);
   const forkFromMessage = () => onForkConversation?.(messageIndex);
@@ -489,7 +501,21 @@ const MessageItem = memo(function MessageItem({
                 ))}
               </div>
             )}
-            <RichMarkdown content={contentToText(msg.content)} />
+            <div className={`user-message-body ${isUserCollapsed ? 'collapsed' : ''}`}>
+              <RichMarkdown content={userText} />
+            </div>
+            {userMessageIsLong && (
+              <div className="long-message-controls">
+                <button
+                  type="button"
+                  className="long-message-toggle"
+                  onClick={() => setIsUserExpanded((expanded) => !expanded)}
+                >
+                  {isUserExpanded ? 'Collapse message' : 'Show full message'}
+                </button>
+                <span>{userText.length.toLocaleString()} chars</span>
+              </div>
+            )}
           </div>
           {!isLoading && (
             <div className="message-actions">
@@ -727,11 +753,25 @@ export default function ChatInterface({
   const inputRef = useRef(null);
   const turnAnchorsRef = useRef(new Map());
   const messageAnchorsRef = useRef(new Map());
+  const draftHydratedConversationRef = useRef(null);
+  const [draftStatus, setDraftStatus] = useState('');
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState(null);
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const [editTarget, setEditTarget] = useState(null);
+
+  const draftStorageKey = conversation?.id ? `${DRAFT_STORAGE_PREFIX}${conversation.id}` : null;
+
+  const clearSavedDraft = useCallback(() => {
+    if (!draftStorageKey) return;
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch {
+      // Local storage may be unavailable in restricted browser contexts.
+    }
+    setDraftStatus('');
+  }, [draftStorageKey]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -745,6 +785,47 @@ export default function ChatInterface({
     setContextPreview(null);
     setContextPreviewError('');
   }, [conversation?.id]);
+
+  useEffect(() => {
+    if (!draftStorageKey || !conversation?.id) {
+      draftHydratedConversationRef.current = null;
+      setDraftStatus('');
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(draftStorageKey);
+      setInput(saved || '');
+      setDraftStatus(saved ? 'Draft restored' : '');
+    } catch {
+      setDraftStatus('Draft storage unavailable');
+    } finally {
+      draftHydratedConversationRef.current = conversation.id;
+    }
+  }, [conversation?.id, draftStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey || !conversation?.id) return undefined;
+    if (draftHydratedConversationRef.current !== conversation.id) return undefined;
+    if (editTarget) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const value = input.trim() ? input : '';
+        if (value) {
+          window.localStorage.setItem(draftStorageKey, value);
+          setDraftStatus('Draft saved locally');
+        } else {
+          window.localStorage.removeItem(draftStorageKey);
+          setDraftStatus('');
+        }
+      } catch {
+        setDraftStatus('Draft storage unavailable');
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [conversation?.id, draftStorageKey, editTarget, input]);
 
   // Memoize context calculation to avoid re-computing on every render
   const conversationContext = useMemo(() => {
@@ -1074,9 +1155,10 @@ export default function ChatInterface({
     });
     setEditTarget(null);
     setInput('');
+    clearSavedDraft();
     setContextPreview(null);
     setContextPreviewError('');
-  }, [editTarget, input, isLoading, onRetryQuery]);
+  }, [clearSavedDraft, editTarget, input, isLoading, onRetryQuery]);
 
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
@@ -1087,11 +1169,12 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
       onSendMessage(input, attachedFiles);
       setInput('');
+      clearSavedDraft();
       setContextPreview(null);
       setContextPreviewError('');
       // App clears sent files after a successful response.
     }
-  }, [input, attachedFiles, isLoading, onSendMessage, editTarget, submitEditedRetry]);
+  }, [input, attachedFiles, isLoading, onSendMessage, editTarget, submitEditedRetry, clearSavedDraft]);
 
   const handleQuickSubmit = useCallback((e) => {
     e.preventDefault();
@@ -1102,11 +1185,12 @@ export default function ChatInterface({
     if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
       onSendQuickMessage(input, attachedFiles);
       setInput('');
+      clearSavedDraft();
       setContextPreview(null);
       setContextPreviewError('');
       // App clears sent files after a successful response.
     }
-  }, [input, attachedFiles, isLoading, onSendQuickMessage, editTarget, submitEditedRetry]);
+  }, [input, attachedFiles, isLoading, onSendQuickMessage, editTarget, submitEditedRetry, clearSavedDraft]);
 
   const handlePreviewContext = useCallback(async (mode) => {
     if (!onPreviewContext || isLoading || isPreviewLoading) return;
@@ -1360,6 +1444,17 @@ export default function ChatInterface({
 
         {contextPreviewError && (
           <div className="context-preview-error">{contextPreviewError}</div>
+        )}
+
+        {draftStatus && !editTarget && !isLoading && (
+          <div className="draft-status-row">
+            <span>{draftStatus}</span>
+            {input.trim() && (
+              <button type="button" onClick={() => { setInput(''); clearSavedDraft(); }}>
+                Clear draft
+              </button>
+            )}
+          </div>
         )}
 
         <form className="input-form" onSubmit={handleSubmit}>

@@ -1,5 +1,41 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import './Sidebar.css';
+
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const groupConversationDate = (value) => {
+  if (!value) return 'Older';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Older';
+
+  const today = startOfDay(new Date());
+  const target = startOfDay(date);
+  const dayDelta = Math.floor((today - target) / 86400000);
+
+  if (dayDelta <= 0) return 'Today';
+  if (dayDelta === 1) return 'Yesterday';
+  if (dayDelta < 7) return 'Previous 7 days';
+  if (dayDelta < 30) return 'Previous 30 days';
+  return 'Older';
+};
+
+const groupConversations = (conversations) => {
+  const groups = [];
+  const groupMap = new Map();
+
+  conversations.forEach((conversation) => {
+    const label = groupConversationDate(conversation.updated_at || conversation.created_at);
+    if (!groupMap.has(label)) {
+      const group = { label, conversations: [] };
+      groupMap.set(label, group);
+      groups.push(group);
+    }
+    groupMap.get(label).conversations.push(conversation);
+  });
+
+  return groups;
+};
 
 export default function Sidebar({
   conversations,
@@ -14,6 +50,7 @@ export default function Sidebar({
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+  const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
 
   const handleStartEdit = (conv) => {
     setEditingId(conv.id);
@@ -71,79 +108,87 @@ export default function Sidebar({
         {conversations.length === 0 ? (
           <div className="no-conversations">No conversations yet</div>
         ) : (
-          conversations.map((conv) => (
-            <div
-              key={conv.id}
-              className={`conversation-item ${
-                conv.id === currentConversationId ? 'active' : ''
-              }`}
-              onClick={() => editingId === conv.id ? null : onSelectConversation(conv.id)}
-            >
-              {editingId === conv.id ? (
-                // Inline edit form
-                <div className="conversation-title-edit" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    onKeyDown={(e) => handleKeyDown(e, conv.id)}
-                    className="title-input"
-                    autoFocus
-                    maxLength={100}
-                  />
-                  <div className="title-edit-actions">
-                    <button
-                      className="title-save-btn"
-                      onClick={() => handleSaveEdit(conv.id)}
-                      title="Save (Enter)"
-                    >
-                      ✓
-                    </button>
-                    <button
-                      className="title-cancel-btn"
-                      onClick={handleCancelEdit}
-                      title="Cancel (Esc)"
-                    >
-                      ✕
-                    </button>
-                  </div>
+          conversationGroups.map((group) => (
+            <section className="conversation-group" key={group.label}>
+              <div className="conversation-group-header">
+                <span>{group.label}</span>
+                <span>{group.conversations.length}</span>
+              </div>
+              {group.conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  className={`conversation-item ${
+                    conv.id === currentConversationId ? 'active' : ''
+                  }`}
+                  onClick={() => editingId === conv.id ? null : onSelectConversation(conv.id)}
+                >
+                  {editingId === conv.id ? (
+                    // Inline edit form
+                    <div className="conversation-title-edit" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onKeyDown={(e) => handleKeyDown(e, conv.id)}
+                        className="title-input"
+                        autoFocus
+                        maxLength={100}
+                      />
+                      <div className="title-edit-actions">
+                        <button
+                          className="title-save-btn"
+                          onClick={() => handleSaveEdit(conv.id)}
+                          title="Save (Enter)"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          className="title-cancel-btn"
+                          onClick={handleCancelEdit}
+                          title="Cancel (Esc)"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    // Display mode with action buttons
+                    <>
+                      <div className="conversation-title-row">
+                        <div className="conversation-title">
+                          {conv.title || 'New Conversation'}
+                        </div>
+                        <div className="conversation-actions">
+                          <button
+                            className="title-edit-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartEdit(conv);
+                            }}
+                            title="Edit title"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            className="conversation-delete-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteConversation(conv.id);
+                            }}
+                            title="Delete conversation"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                      <div className="conversation-meta">
+                        {conv.message_count} messages
+                      </div>
+                    </>
+                  )}
                 </div>
-              ) : (
-                // Display mode with action buttons
-                <>
-                  <div className="conversation-title-row">
-                    <div className="conversation-title">
-                      {conv.title || 'New Conversation'}
-                    </div>
-                    <div className="conversation-actions">
-                      <button
-                        className="title-edit-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStartEdit(conv);
-                        }}
-                        title="Edit title"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        className="conversation-delete-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteConversation(conv.id);
-                        }}
-                        title="Delete conversation"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                  <div className="conversation-meta">
-                    {conv.message_count} messages
-                  </div>
-                </>
-              )}
-            </div>
+              ))}
+            </section>
           ))
         )}
       </div>

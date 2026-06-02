@@ -1352,3 +1352,61 @@
     grid-template-columns: 1fr;
   }
 }
+
+.user-message-body.collapsed {
+  position: relative;
+  max-height: 360px;
+  overflow: hidden;
+}
+
+.user-message-body.collapsed::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 72px;
+  background: linear-gradient(to bottom, transparent, var(--user-message-bg));
+  content: "";
+  pointer-events: none;
+}
+
+.long-message-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.long-message-toggle,
+.draft-status-row button {
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.long-message-toggle:hover,
+.draft-status-row button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.draft-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}

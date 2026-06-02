@@ -110,3 +110,93 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+
+.answer-navigation {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.answer-outline {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.answer-outline > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.answer-outline-item,
+.answer-collapse-toggle {
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.answer-outline-item.level-3,
+.answer-outline-item.level-4 {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.answer-outline-item:hover,
+.answer-collapse-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.answer-collapse-toggle {
+  flex: 0 0 auto;
+  border-radius: 6px;
+}
+
+.final-text-shell {
+  position: relative;
+}
+
+.final-text-shell.collapsed {
+  max-height: 720px;
+  overflow: hidden;
+}
+
+.final-text-fade {
+  height: 72px;
+  margin-top: -72px;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(to bottom, transparent, #ffffff 82%);
+  pointer-events: none;
+  position: relative;
+}
+
+:root[data-theme='dark'] .final-text-fade {
+  background: linear-gradient(to bottom, transparent, var(--surface-bg) 82%);
+}
+
+@media (max-width: 720px) {
+  .answer-navigation {
+    flex-direction: column;
+  }
+
+  .answer-collapse-toggle,
+  .answer-outline-item {
+    max-width: 100%;
+  }
+}

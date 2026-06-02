@@ -98,6 +98,35 @@
   font-size: 14px;
 }
 
+
+.conversation-group {
+  margin-bottom: 12px;
+}
+
+.conversation-group-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 6px 6px;
+  background: var(--sidebar-bg);
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.conversation-group-header span:last-child {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  text-align: center;
+}
+
 .conversation-item {
   padding: 12px;
   margin-bottom: 4px;
