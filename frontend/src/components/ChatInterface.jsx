@@ -84,6 +84,123 @@ const ModelStatusList = memo(function ModelStatusList({ statuses }) {
   );
 });
 
+const shortModelName = (model) => model?.split('/')?.[1] || model || 'unknown';
+
+const summarizeResults = (results = [], contentKey) => {
+  const total = results.length;
+  const success = results.filter(result => result?.status !== 'failed' && Boolean(result?.[contentKey])).length;
+  return { total, success, failed: Math.max(0, total - success) };
+};
+
+const formatStageSummary = (label, summary) => `${label} ${summary.success}/${summary.total || 0}${summary.failed ? `, ${summary.failed} failed` : ''}`;
+
+const sumTokens = (...items) => items.flat().reduce((total, item) => {
+  const usage = item?.usage || {};
+  return total + (usage.total_tokens || 0);
+}, 0);
+
+const maxDuration = (...items) => {
+  const durations = items.flat()
+    .map(item => item?.duration_seconds)
+    .filter(value => typeof value === 'number');
+  return durations.length ? Math.max(...durations) : null;
+};
+
+const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
+  if (msg.metadata?.mode === 'quick') return null;
+
+  const stage1 = summarizeResults(msg.stage1 || [], 'response');
+  const stage2 = summarizeResults(msg.stage2 || [], 'ranking');
+  const attempts = msg.stage3?.metadata?.attempts || msg.metadata?.attempts || [];
+  const warnings = msg.metadata?.warnings || [];
+  const tokenTotal = sumTokens(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
+  const slowestStageDuration = maxDuration(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
+  const hasData = stage1.total > 0 || stage2.total > 0 || msg.stage3 || attempts.length > 0 || warnings.length > 0;
+
+  if (!hasData) return null;
+
+  return (
+    <div className="council-run-summary" aria-label="Council run summary">
+      <div className="council-summary-main">
+        <span className="council-summary-title">Council summary</span>
+        {stage1.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 1', stage1)}</span>}
+        {stage2.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 2', stage2)}</span>}
+        {msg.stage3?.model && <span className="council-summary-chip">Chair {shortModelName(msg.stage3.model)}</span>}
+        {attempts.length > 1 && <span className="council-summary-chip">{attempts.length - 1} fallback attempt{attempts.length === 2 ? '' : 's'}</span>}
+        {tokenTotal > 0 && <span className="council-summary-chip">{tokenTotal} tokens</span>}
+        {slowestStageDuration != null && <span className="council-summary-chip">slowest {slowestStageDuration}s</span>}
+      </div>
+      {warnings.length > 0 && (
+        <div className="council-summary-warnings">
+          {warnings.map((warning, index) => <span key={`${warning}-${index}`}>{warning}</span>)}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const classifyError = (msg) => {
+  const stage3 = msg.stage3 || {};
+  const failedStage1 = (msg.stage1 || []).find(result => result?.status === 'failed');
+  const failedStage2 = (msg.stage2 || []).find(result => result?.status === 'failed');
+  const failedAttempt = (stage3.metadata?.attempts || []).find(attempt => !attempt.ok);
+  const errorType = stage3.error_type || msg.error_type || failedAttempt?.error_type || failedStage1?.error_type || failedStage2?.error_type || 'unknown_error';
+  const error = stage3.error || msg.error || failedAttempt?.error || failedStage1?.error || failedStage2?.error || '';
+
+  if (errorType === 'disabled_model') {
+    return { title: 'Model disabled', detail: 'One configured model is disabled or unavailable.', action: 'Open LLM settings and enable or replace the model.', settings: true };
+  }
+  if (errorType === 'http_status' && /401|403/.test(error)) {
+    return { title: 'Provider authentication failed', detail: 'The provider rejected the request.', action: 'Check API key and base URL in LLM settings.', settings: true };
+  }
+  if (errorType === 'http_status' && /429/.test(error)) {
+    return { title: 'Provider rate limited the request', detail: 'The model provider returned a rate limit response.', action: 'Retry later or switch to another fallback model.', settings: true };
+  }
+  if (errorType === 'timeout' || errorType === 'network_error') {
+    return { title: 'Provider request did not complete', detail: 'The model call timed out or hit a network error.', action: 'Retry the turn, continue saved stages, or choose a faster fallback model.', settings: false };
+  }
+  if (errorType === 'all_stage1_models_failed') {
+    return { title: 'All Stage 1 models failed', detail: 'No council member returned a usable first-stage response.', action: 'Retry after checking model availability and provider settings.', settings: true };
+  }
+  if (errorType === 'invalid_response') {
+    return { title: 'Invalid provider response', detail: 'A provider response could not be parsed into usable model output.', action: 'Retry or switch the affected model.', settings: true };
+  }
+  return { title: 'Council run needs attention', detail: error || 'A model call failed or the saved run is incomplete.', action: 'Retry the turn or inspect context/model details below.', settings: false };
+};
+
+const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onContinue, onRetry, onOpenSettings }) {
+  const hasFailure = msg.status === 'failed' || msg.stage3?.status === 'failed';
+
+  if (!hasFailure) return null;
+
+  const info = classifyError(msg);
+
+  return (
+    <div className="error-action-panel">
+      <div className="error-action-copy">
+        <strong>{info.title}</strong>
+        <span>{info.detail}</span>
+        <span>{info.action}</span>
+      </div>
+      <div className="error-action-buttons">
+        {canContinue && (
+          <button type="button" className="continue-button" onClick={onContinue}>
+            Continue
+          </button>
+        )}
+        <button type="button" className="retry-button" onClick={onRetry}>
+          Retry
+        </button>
+        {info.settings && onOpenSettings && (
+          <button type="button" className="settings-inline-button" onClick={onOpenSettings}>
+            LLM Settings
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 const formatCount = (value, unit) => `${value || 0} ${unit}${value === 1 ? '' : 's'}`;
 
 const ContextAuditDetails = memo(function ContextAuditDetails({ turnAudit, fallbackSnapshot, onReplayContext }) {
@@ -267,6 +384,7 @@ const MessageItem = memo(function MessageItem({
   onToggleMessageContextExcluded,
   onForkConversation,
   onReplayMessageContext,
+  onOpenSettings,
   isLastMessage,
   messageIndex,
   turnAnchorRef,
@@ -389,8 +507,8 @@ const MessageItem = memo(function MessageItem({
               <button
                 type="button"
                 className="edit-message-button"
-                onClick={() => onEditMessage(msg)}
-                title="Edit this message in the input box"
+                onClick={() => onEditMessage(msg, messageIndex)}
+                title="Edit and retry from this message"
                 aria-label="Edit this message"
               >
                 ✏️ Edit
@@ -435,6 +553,16 @@ const MessageItem = memo(function MessageItem({
               {restoredStatusText}
             </div>
           )}
+
+          <CouncilRunSummary msg={msg} />
+
+          <ErrorActionPanel
+            msg={msg}
+            canContinue={Boolean(canContinueSavedStages)}
+            onContinue={() => onResumeQuery?.(messageIndex)}
+            onRetry={() => onRetryQuery?.()}
+            onOpenSettings={onOpenSettings}
+          />
 
           {/* Enhanced loading states with context awareness */}
           {msg.loading?.stage1 && (
@@ -580,6 +708,7 @@ export default function ChatInterface({
   onToggleMessagePin,
   onToggleMessageContextExcluded,
   onForkConversation,
+  onOpenSettings,
   isLoading,
   activeStreamId,
   attachedFiles,
@@ -600,6 +729,9 @@ export default function ChatInterface({
   const messageAnchorsRef = useRef(new Map());
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState(null);
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
+  const [editTarget, setEditTarget] = useState(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -715,13 +847,46 @@ export default function ChatInterface({
       .filter(entry => entry.role === 'user');
   }, [conversation]);
 
+  const messageSearchResults = useMemo(() => {
+    const query = messageSearchQuery.trim().toLowerCase();
+    if (!query || !conversation?.messages) return [];
+
+    return conversation.messages.reduce((results, msg, index) => {
+      const text = msg.role === 'assistant'
+        ? [
+            msg.stage3?.response || '',
+            ...(msg.stage1 || []).map(result => result?.response || result?.error || ''),
+            ...(msg.stage2 || []).map(result => result?.ranking || result?.error || ''),
+          ].join('\n')
+        : contentToText(msg.content);
+      const lowerText = text.toLowerCase();
+      const matchIndex = lowerText.indexOf(query);
+      if (matchIndex === -1) return results;
+
+      const excerptStart = Math.max(0, matchIndex - 48);
+      const excerpt = text.slice(excerptStart, matchIndex + query.length + 96).replace(/\s+/g, ' ').trim();
+      results.push({
+        messageIndex: index,
+        role: msg.role,
+        turnNumber: Math.floor(index / 2) + 1,
+        excerpt: `${excerptStart > 0 ? '...' : ''}${excerpt}${matchIndex + query.length + 96 < text.length ? '...' : ''}`,
+      });
+      return results;
+    }, []);
+  }, [conversation, messageSearchQuery]);
+
   const showTurnNavigator = turnEntries.length > 1;
   const boundedCurrentTurnIndex = Math.max(0, Math.min(currentTurnIndex, turnEntries.length - 1));
+  const boundedSearchResultIndex = Math.max(0, Math.min(activeSearchResultIndex, messageSearchResults.length - 1));
+  const activeSearchResult = messageSearchResults[boundedSearchResultIndex] || null;
 
   useEffect(() => {
     turnAnchorsRef.current.clear();
     messageAnchorsRef.current.clear();
     setHighlightedMessageIndex(null);
+    setMessageSearchQuery('');
+    setActiveSearchResultIndex(0);
+    setEditTarget(null);
   }, [conversation?.id]);
 
   const registerTurnAnchor = useCallback((messageIndex, node) => {
@@ -751,6 +916,18 @@ export default function ChatInterface({
     }, 1600);
   }, []);
 
+  const jumpToSearchResult = useCallback((nextIndex) => {
+    if (messageSearchResults.length === 0) return;
+    const boundedIndex = Math.max(0, Math.min(nextIndex, messageSearchResults.length - 1));
+    const result = messageSearchResults[boundedIndex];
+    setActiveSearchResultIndex(boundedIndex);
+    scrollToMessage(result.messageIndex);
+  }, [messageSearchResults, scrollToMessage]);
+
+  useEffect(() => {
+    setActiveSearchResultIndex(0);
+  }, [messageSearchQuery, conversation?.id]);
+
   const scrollToTurn = useCallback((nextIndex) => {
     const boundedIndex = Math.max(0, Math.min(nextIndex, turnEntries.length - 1));
     const entry = turnEntries[boundedIndex];
@@ -770,6 +947,12 @@ export default function ChatInterface({
     scrollToBottom();
     setCurrentTurnIndex(Math.max(0, turnEntries.length - 1));
   }, [turnEntries.length]);
+
+  useEffect(() => {
+    if (messageSearchQuery.trim() && activeSearchResult) {
+      scrollToMessage(activeSearchResult.messageIndex);
+    }
+  }, [activeSearchResult, messageSearchQuery, scrollToMessage]);
 
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -862,8 +1045,45 @@ export default function ChatInterface({
     }
   }, [isLoading, handleFileUploadLocal]);
 
+  const handleEditMessage = useCallback((msg, messageIndex) => {
+    const text = contentToText(msg.content);
+    setEditTarget({
+      messageIndex,
+      turnNumber: Math.floor(messageIndex / 2) + 1,
+      originalContent: text,
+    });
+    setInput(text);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      adjustInputHeight();
+    });
+  }, [adjustInputHeight]);
+
+  const cancelEditTarget = useCallback(() => {
+    setEditTarget(null);
+    setInput('');
+    window.requestAnimationFrame(() => adjustInputHeight());
+  }, [adjustInputHeight]);
+
+  const submitEditedRetry = useCallback((mode) => {
+    if (!editTarget || isLoading || !input.trim()) return;
+    onRetryQuery?.({
+      messageIndex: editTarget.messageIndex,
+      editedContent: input,
+      mode,
+    });
+    setEditTarget(null);
+    setInput('');
+    setContextPreview(null);
+    setContextPreviewError('');
+  }, [editTarget, input, isLoading, onRetryQuery]);
+
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
+    if (editTarget) {
+      submitEditedRetry('council');
+      return;
+    }
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
       onSendMessage(input, attachedFiles);
       setInput('');
@@ -871,10 +1091,14 @@ export default function ChatInterface({
       setContextPreviewError('');
       // App clears sent files after a successful response.
     }
-  }, [input, attachedFiles, isLoading, onSendMessage]);
+  }, [input, attachedFiles, isLoading, onSendMessage, editTarget, submitEditedRetry]);
 
   const handleQuickSubmit = useCallback((e) => {
     e.preventDefault();
+    if (editTarget) {
+      submitEditedRetry('quick');
+      return;
+    }
     if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
       onSendQuickMessage(input, attachedFiles);
       setInput('');
@@ -882,7 +1106,7 @@ export default function ChatInterface({
       setContextPreviewError('');
       // App clears sent files after a successful response.
     }
-  }, [input, attachedFiles, isLoading, onSendQuickMessage]);
+  }, [input, attachedFiles, isLoading, onSendQuickMessage, editTarget, submitEditedRetry]);
 
   const handlePreviewContext = useCallback(async (mode) => {
     if (!onPreviewContext || isLoading || isPreviewLoading) return;
@@ -898,15 +1122,6 @@ export default function ChatInterface({
       setIsPreviewLoading(false);
     }
   }, [attachedFiles, input, isLoading, isPreviewLoading, onPreviewContext]);
-
-  const handleEditMessage = useCallback((msg) => {
-    const text = contentToText(msg.content);
-    setInput(text);
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      adjustInputHeight();
-    });
-  }, [adjustInputHeight]);
 
   const handleKeyDown = useCallback((e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -956,6 +1171,56 @@ export default function ChatInterface({
           </div>
         ) : (
           <>
+            <div className="conversation-search-bar" role="search">
+              <input
+                type="search"
+                value={messageSearchQuery}
+                onChange={(event) => setMessageSearchQuery(event.target.value)}
+                placeholder="Search in this conversation"
+                aria-label="Search in this conversation"
+              />
+              <span className="conversation-search-status">
+                {messageSearchQuery.trim()
+                  ? `${messageSearchResults.length ? boundedSearchResultIndex + 1 : 0} / ${messageSearchResults.length}`
+                  : `${conversation.messages.length} messages`}
+              </span>
+              <button
+                type="button"
+                className="conversation-search-button"
+                onClick={() => jumpToSearchResult(boundedSearchResultIndex - 1)}
+                disabled={!messageSearchResults.length || boundedSearchResultIndex <= 0}
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                className="conversation-search-button"
+                onClick={() => jumpToSearchResult(boundedSearchResultIndex + 1)}
+                disabled={!messageSearchResults.length || boundedSearchResultIndex >= messageSearchResults.length - 1}
+              >
+                Next
+              </button>
+              {messageSearchQuery && (
+                <button
+                  type="button"
+                  className="conversation-search-button compact"
+                  onClick={() => setMessageSearchQuery('')}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {activeSearchResult && messageSearchQuery.trim() && (
+              <button
+                type="button"
+                className="conversation-search-excerpt"
+                onClick={() => jumpToSearchResult(boundedSearchResultIndex)}
+              >
+                <span>{activeSearchResult.role} · Turn {activeSearchResult.turnNumber}</span>
+                <strong>{activeSearchResult.excerpt}</strong>
+              </button>
+            )}
+
             {/* Show conversation context for multi-turn conversations */}
             {hasPreviousTurns && (
               <div className="conversation-section">
@@ -996,6 +1261,7 @@ export default function ChatInterface({
                   onToggleMessageContextExcluded={isLoading ? null : onToggleMessageContextExcluded}
                   onForkConversation={isLoading ? null : onForkConversation}
                   onReplayMessageContext={isLoading ? null : onReplayMessageContext}
+                  onOpenSettings={onOpenSettings}
                   isLastMessage={index === conversation.messages.length - 1}
                   messageIndex={index}
                   turnAnchorRef={msg.role === 'user' ? (node) => registerTurnAnchor(index, node) : undefined}
@@ -1055,7 +1321,17 @@ export default function ChatInterface({
 
       {/* Enhanced input form with context hints */}
       <div className="input-section">
-        {hasPreviousTurns && !isLoading && (
+        {editTarget && !isLoading && (
+          <div className="edit-retry-banner">
+            <div>
+              <strong>Editing Turn {editTarget.turnNumber}</strong>
+              <span>Submitting will replace this user message, remove later messages, and regenerate from here.</span>
+            </div>
+            <button type="button" onClick={cancelEditTarget}>Cancel</button>
+          </div>
+        )}
+
+        {hasPreviousTurns && !isLoading && !editTarget && (
           <div className="input-context-hint">
             <span className="hint-icon">💭</span>
             <span className="hint-text">
@@ -1095,9 +1371,11 @@ export default function ChatInterface({
                 placeholder={
                   isLoading
                     ? "Query in progress... (Esc to stop)"
-                    : hasPreviousTurns
-                      ? "Continue... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
-                      : "Ask... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
+                    : editTarget
+                      ? "Edit this message... (Enter retry Council, Ctrl+Enter retry Quick)"
+                      : hasPreviousTurns
+                        ? "Continue... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
+                        : "Ask... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
                 }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1140,20 +1418,20 @@ export default function ChatInterface({
                   type="button"
                   className="quick-button"
                   onClick={handleQuickSubmit}
-                  disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
-                  title="Quick single-model response"
-                  aria-label="Quick query"
+                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading}
+                  title={editTarget ? "Retry this edited message with quick mode" : "Quick single-model response"}
+                  aria-label={editTarget ? "Retry edited message with quick mode" : "Quick query"}
                 >
-                  ⚡ Quick
+                  {editTarget ? '⚡ Retry Quick' : '⚡ Quick'}
                 </button>
                 <button
                   type="submit"
                   className="send-button"
-                  disabled={(!input.trim() && attachedFiles.length === 0) || isLoading}
-                  title="Full 3-stage council response"
-                  aria-label="Send to council"
+                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading}
+                  title={editTarget ? "Retry this edited message with council mode" : "Full 3-stage council response"}
+                  aria-label={editTarget ? "Retry edited message with council mode" : "Send to council"}
                 >
-                  🏛️ Council
+                  {editTarget ? '🏛️ Retry Council' : '🏛️ Council'}
                 </button>
               </div>
             )}
