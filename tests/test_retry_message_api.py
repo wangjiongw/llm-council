@@ -85,7 +85,7 @@ class RetryMessageApiTest(unittest.TestCase):
 
         captured_history = {}
 
-        async def fake_quick(content, conversation_history=None, event_callback=None):
+        async def fake_quick(content, conversation_history=None, event_callback=None, **_kwargs):
             captured_history["content"] = content
             captured_history["history"] = conversation_history
             return {

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend import storage
 from backend.main import app
+from backend.provider_audit import canonical_digest, make_provider_request_audit
 
 
 class QuickStreamTest(unittest.TestCase):
@@ -21,12 +22,36 @@ class QuickStreamTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_quick_stream_persists_running_turn_as_complete(self):
-        async def fake_query_model(model, messages, timeout=None, event_callback=None):
+        async def fake_query_model(
+            model,
+            messages,
+            timeout=None,
+            event_callback=None,
+            provider_audit_callback=None,
+            audit_context=None,
+            call_kind="model",
+            stage="model",
+            provider_function="query_model",
+            attempt=None,
+        ):
             if event_callback:
                 await event_callback({
                     "status": "first_event",
                     "first_event_seconds": 0.01,
                 })
+            if provider_audit_callback:
+                provider_audit_callback(make_provider_request_audit(
+                    model=model,
+                    messages=messages,
+                    stream=True,
+                    call_kind=call_kind,
+                    stage=stage,
+                    provider_function=provider_function,
+                    source_map=(audit_context or {}).get("source_map"),
+                    turn_lineage=(audit_context or {}).get("turn_lineage"),
+                    attempt=attempt,
+                    metadata=(audit_context or {}).get("metadata"),
+                ))
             return {
                 "status": "success",
                 "model": model,
@@ -84,9 +109,18 @@ class QuickStreamTest(unittest.TestCase):
         self.assertEqual(turns[0]["user_message_index"], 0)
         self.assertEqual(turns[0]["assistant_message_index"], 1)
         self.assertEqual(turns[0]["context_snapshot"]["mode"], "quick")
-        self.assertEqual(turns[0]["context_payload"]["schema"], "context_payload_v1")
+        self.assertEqual(turns[0]["context_payload"]["schema"], "context_payload_v2")
+        self.assertIn("context_package_audit", turns[0]["context_payload"])
         self.assertEqual(turns[0]["context_payload"]["model_messages"], [])
         self.assertEqual(turns[0]["context_payload"]["audit_messages"], [])
+        provider_audit = turns[0]["context_payload"]["provider_request_audit"]
+        self.assertEqual(len(provider_audit), 1)
+        self.assertEqual(provider_audit[0]["call_kind"], "quick")
+        self.assertEqual(provider_audit[0]["stage"], "quick")
+        self.assertEqual(provider_audit[0]["turn_lineage"]["user_message_index"], 0)
+        self.assertEqual(provider_audit[0]["turn_lineage"]["turn_id"], turns[0]["id"])
+        self.assertEqual(provider_audit[0]["source_map"]["current_message_ref"]["message_index"], 0)
+        self.assertEqual(canonical_digest(provider_audit[0]["payload_preview"]), provider_audit[0]["digest"])
         self.assertEqual(turns[0]["context_payload"]["current_message"], {"role": "user", "content": "hello quick"})
         self.assertEqual(turns[0]["runs"][0]["stage"], "stage3")
         self.assertEqual(turns[0]["runs"][0]["model"], "quick-model")

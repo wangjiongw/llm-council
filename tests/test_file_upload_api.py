@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from backend import storage
+from backend.council import build_quick_messages
 from backend.main import app
+from backend.provider_audit import canonical_digest, make_provider_request_audit
 
 
 class FileUploadApiTest(unittest.TestCase):
@@ -33,6 +35,36 @@ class FileUploadApiTest(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+    def _quick_with_provider_audit(self, response_text: str):
+        async def fake_quick(
+            content,
+            conversation_history=None,
+            event_callback=None,
+            provider_audit_callback=None,
+            audit_context=None,
+        ):
+            messages = build_quick_messages(content, conversation_history)
+            if provider_audit_callback:
+                provider_audit_callback(make_provider_request_audit(
+                    model="quick-model",
+                    messages=messages,
+                    stream=False,
+                    call_kind="quick",
+                    stage="quick",
+                    provider_function="quick_query",
+                    source_map=(audit_context or {}).get("source_map"),
+                    turn_lineage=(audit_context or {}).get("turn_lineage"),
+                    metadata=(audit_context or {}).get("metadata"),
+                ))
+            return {
+                "model": "quick-model",
+                "status": "success",
+                "response": response_text,
+                "metadata": {"attempts": [{"model": "quick-model", "ok": True}]},
+            }
+
+        return fake_quick
 
     def test_update_file_queue_accepts_object_body(self):
         response = self.client.patch(
@@ -78,12 +110,7 @@ class FileUploadApiTest(unittest.TestCase):
 
 
     def test_quick_mode_with_file_uses_quick_query(self):
-        quick_mock = AsyncMock(return_value={
-            "model": "quick-model",
-            "status": "success",
-            "response": "quick file ok",
-            "metadata": {"attempts": [{"model": "quick-model", "ok": True}]},
-        })
+        quick_mock = AsyncMock(side_effect=self._quick_with_provider_audit("quick file ok"))
         council_mock = AsyncMock(return_value=([{}], [], {"response": "wrong path"}, {}))
 
         with (
@@ -127,15 +154,16 @@ class FileUploadApiTest(unittest.TestCase):
         self.assertEqual(turn["context_snapshot"]["current_turn"]["file_names"], ["notes.md"])
         self.assertEqual(turn["runs"][0]["stage"], "stage3")
         self.assertEqual(turn["runs"][0]["model"], "quick-model")
+        provider_audit = turn["context_payload"]["provider_request_audit"]
+        self.assertEqual(len(provider_audit), 1)
+        self.assertEqual(provider_audit[0]["turn_lineage"]["user_message_index"], 0)
+        self.assertEqual(provider_audit[0]["turn_lineage"]["turn_id"], turn["id"])
+        self.assertEqual(provider_audit[0]["source_map"]["current_message_ref"]["message_index"], 0)
+        self.assertEqual(canonical_digest(provider_audit[0]["payload_preview"]), provider_audit[0]["digest"])
 
 
     def test_image_upload_is_sent_to_model_but_redacted_from_persistent_context_audit(self):
-        quick_mock = AsyncMock(return_value={
-            "model": "quick-model",
-            "status": "success",
-            "response": "image ok",
-            "metadata": {"attempts": [{"model": "quick-model", "ok": True}]},
-        })
+        quick_mock = AsyncMock(side_effect=self._quick_with_provider_audit("image ok"))
 
         with (
             patch("backend.main.quick_query", new=quick_mock),
@@ -181,13 +209,16 @@ class FileUploadApiTest(unittest.TestCase):
             context_payload["current_message"]["content"][1]["attachment_ref"]["id"],
             stored_content[1]["attachment_ref"]["id"],
         )
+        provider_audit = context_payload["provider_request_audit"]
+        self.assertEqual(len(provider_audit), 1)
+        self.assertEqual(provider_audit[0]["turn_lineage"]["user_message_index"], 0)
+        self.assertEqual(provider_audit[0]["turn_lineage"]["turn_id"], conversation["turns"][0]["id"])
+        self.assertEqual(provider_audit[0]["source_map"]["current_message_ref"]["message_index"], 0)
+        self.assertEqual(canonical_digest(provider_audit[0]["payload_preview"]), provider_audit[0]["digest"])
+        self.assertNotIn("data:image/png;base64", str(provider_audit))
+        self.assertIn("[redacted image data URI]", str(provider_audit))
 
-        retry_mock = AsyncMock(return_value={
-            "model": "quick-model",
-            "status": "success",
-            "response": "image retry ok",
-            "metadata": {"attempts": [{"model": "quick-model", "ok": True}]},
-        })
+        retry_mock = AsyncMock(side_effect=self._quick_with_provider_audit("image retry ok"))
         with patch("backend.main.quick_query", new=retry_mock):
             retry = self.client.post(
                 "/api/conversations/conv-1/messages/0/retry",
@@ -197,6 +228,13 @@ class FileUploadApiTest(unittest.TestCase):
         self.assertEqual(retry.status_code, 200)
         retry_content = retry_mock.call_args.args[0]
         self.assertTrue(retry_content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        retry_turn = storage.get_conversation("conv-1")["turns"][0]
+        retry_audit = retry_turn["context_payload"]["provider_request_audit"]
+        self.assertEqual(len(retry_audit), 1)
+        self.assertEqual(retry_audit[0]["turn_lineage"]["user_message_index"], 0)
+        self.assertEqual(retry_audit[0]["turn_lineage"]["turn_id"], retry_turn["id"])
+        self.assertEqual(retry_audit[0]["source_map"]["current_message_ref"]["message_index"], 0)
+        self.assertNotIn("data:image/png;base64", str(retry_audit))
 
 
     def test_image_attachment_lifecycle_copies_to_branch_and_cleans_deleted_conversation(self):
