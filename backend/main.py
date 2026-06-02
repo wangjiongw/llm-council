@@ -12,9 +12,10 @@ import copy
 from pathlib import Path
 
 from . import storage
-from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results
+from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
 from .llm_settings import public_llm_settings, update_llm_settings
 from .openrouter import query_model
+from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
 app = FastAPI(title="LLM Council API")
 
@@ -330,8 +331,21 @@ def _restore_attachment_content(content: Any) -> Any:
     return copy.deepcopy(content)
 
 
-def _context_payload(context_package: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist an auditable context package without storing large binary payloads."""
+def _context_source_map(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    refs = []
+    for package_index, message in enumerate(messages):
+        ref = {"package_message_index": package_index, "role": message.get("role")}
+        if message.get("source") is not None:
+            ref["source"] = message.get("source")
+        if message.get("message_index") is not None:
+            ref["message_index"] = message.get("message_index")
+        if message.get("pinned") is not None:
+            ref["pinned"] = bool(message.get("pinned"))
+        refs.append(ref)
+    return {"message_refs": refs, "message_count": len(messages)}
+
+
+def _context_package_audit(context_package: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
     stats = {
         "redacted_image_items": 0,
         "truncated_text_items": 0,
@@ -340,10 +354,46 @@ def _context_payload(context_package: Dict[str, Any]) -> Dict[str, Any]:
     }
     model_messages = context_package.get("messages") or []
     audit_messages = context_package.get("source_messages") or model_messages
+    safe_model_messages = _audit_safe_messages(model_messages, stats)
+    safe_audit_messages = _audit_safe_messages(audit_messages, stats)
+    snapshot = context_package.get("snapshot") or {}
+    audit = {
+        "schema": "context_package_audit_v1",
+        "payload_kind": "planned_context",
+        "exact_provider_request": False,
+        "model_messages": safe_model_messages,
+        "audit_messages": safe_audit_messages,
+        "snapshot": snapshot,
+        "policy_metadata": {
+            "context_policy": snapshot.get("context_policy") or {},
+            "budget_breakdown": snapshot.get("budget_breakdown") or {},
+            "estimated_context_tokens": snapshot.get("estimated_context_tokens"),
+        },
+        "source_map": _context_source_map(audit_messages),
+        "redaction_policy": redaction_policy(stats),
+    }
+    audit["digest"] = canonical_digest({
+        "model_messages": safe_model_messages,
+        "audit_messages": safe_audit_messages,
+        "snapshot": snapshot,
+        "redaction_policy_version": audit["redaction_policy"].get("version"),
+    })
+    return audit, stats
+
+
+def _context_payload(
+    context_package: Dict[str, Any],
+    provider_request_audit: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Persist audit-safe context and provider-bound request evidence."""
+    context_audit, stats = _context_package_audit(context_package)
     payload = {
-        "schema": "context_payload_v1",
-        "model_messages": _audit_safe_messages(model_messages, stats),
-        "audit_messages": _audit_safe_messages(audit_messages, stats),
+        "schema": "context_payload_v2",
+        "context_package_audit": context_audit,
+        "provider_request_audit": copy.deepcopy(provider_request_audit or []),
+        # Legacy top-level fields keep old replay/UI callers working.
+        "model_messages": context_audit["model_messages"],
+        "audit_messages": context_audit["audit_messages"],
     }
     if "current_content" in context_package:
         payload["current_message"] = {
@@ -355,6 +405,149 @@ def _context_payload(context_package: Dict[str, Any]) -> Dict[str, Any]:
         "compacted": stats["redacted_image_items"] > 0 or stats["truncated_text_items"] > 0,
     }
     return payload
+
+
+def _provider_turn_lineage(
+    *,
+    conversation_id: str,
+    mode: str,
+    user_message_index: int | None = None,
+    turn_id: str | None = None,
+) -> Dict[str, Any]:
+    lineage: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "mode": mode,
+    }
+    if user_message_index is not None:
+        lineage["user_message_index"] = user_message_index
+    if turn_id is not None:
+        lineage["turn_id"] = turn_id
+    return lineage
+
+
+def _provider_audit_context(
+    context_package: Dict[str, Any],
+    *,
+    conversation_id: str,
+    mode: str,
+    user_message_index: int | None = None,
+    turn_id: str | None = None,
+) -> Dict[str, Any]:
+    source_messages = context_package.get("source_messages") or context_package.get("messages") or []
+    snapshot = context_package.get("snapshot") or {}
+    return {
+        "source_map": _context_source_map(source_messages),
+        "turn_lineage": _provider_turn_lineage(
+            conversation_id=conversation_id,
+            mode=mode,
+            user_message_index=user_message_index,
+            turn_id=turn_id,
+        ),
+        "metadata": {
+            "context_policy": snapshot.get("context_policy") or {},
+            "context_package_message_count": len(context_package.get("messages") or []),
+            "source_message_count": len(source_messages),
+        },
+    }
+
+
+def _finalize_provider_request_audit(
+    provider_request_audit: List[Dict[str, Any]] | None,
+    context_package: Dict[str, Any],
+    *,
+    conversation_id: str,
+    mode: str,
+    user_message_index: int | None,
+    turn_id: str | None,
+) -> List[Dict[str, Any]]:
+    if not provider_request_audit:
+        return []
+
+    context_source_map = _context_source_map(
+        context_package.get("source_messages") or context_package.get("messages") or []
+    )
+    lineage = _provider_turn_lineage(
+        conversation_id=conversation_id,
+        mode=mode,
+        user_message_index=user_message_index,
+        turn_id=turn_id,
+    )
+    finalized: List[Dict[str, Any]] = []
+    for entry in provider_request_audit:
+        updated = copy.deepcopy(entry)
+        updated["turn_lineage"] = {
+            **{key: value for key, value in (updated.get("turn_lineage") or {}).items() if value is not None},
+            **lineage,
+        }
+        provider_messages = (updated.get("payload_preview") or {}).get("messages") or []
+        updated["source_map"] = provider_source_map(
+            provider_messages,
+            context_source_map=context_source_map,
+            turn_lineage=updated["turn_lineage"],
+        )
+        finalized.append(updated)
+
+    provider_request_audit[:] = finalized
+    return finalized
+
+
+def _new_provider_audit_collector(
+    context_package: Dict[str, Any],
+    *,
+    conversation_id: str,
+    mode: str,
+    user_message_index: int | None = None,
+    turn_id: str | None = None,
+) -> tuple[List[Dict[str, Any]], Any, Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+
+    def collect(entry: Dict[str, Any]) -> None:
+        entries.append(entry)
+
+    return entries, collect, _provider_audit_context(
+        context_package,
+        conversation_id=conversation_id,
+        mode=mode,
+        user_message_index=user_message_index,
+        turn_id=turn_id,
+    )
+
+
+def _persist_turn_context_payload(
+    conversation_id: str,
+    turn_id: str | None,
+    context_package: Dict[str, Any],
+    provider_request_audit: List[Dict[str, Any]],
+    *,
+    status: str | None = None,
+) -> None:
+    if not turn_id:
+        return
+
+    user_message_index = None
+    mode = (context_package.get("snapshot") or {}).get("mode") or "unknown"
+    conversation = storage.get_conversation(conversation_id) or {}
+    for turn in conversation.get("turns") or []:
+        if turn.get("id") == turn_id:
+            user_message_index = turn.get("user_message_index")
+            mode = turn.get("mode") or mode
+            break
+
+    finalized_audit = _finalize_provider_request_audit(
+        provider_request_audit,
+        context_package,
+        conversation_id=conversation_id,
+        mode=mode,
+        user_message_index=user_message_index,
+        turn_id=turn_id,
+    )
+    storage.update_turn_record(
+        conversation_id,
+        turn_id,
+        status=status,
+        context_snapshot=context_package.get("snapshot") or {},
+        context_payload=_context_payload(context_package, finalized_audit),
+    )
 
 
 def _content_text_for_compare(content: Any) -> str:
@@ -432,14 +625,148 @@ def _context_payload_comparison(
     }
 
 
+def _saved_context_audit_messages(saved_context_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    context_audit = saved_context_payload.get("context_package_audit") or {}
+    return (
+        context_audit.get("audit_messages")
+        or context_audit.get("model_messages")
+        or saved_context_payload.get("audit_messages")
+        or saved_context_payload.get("model_messages")
+        or []
+    )
+
+
+def _provider_rebuild_messages(
+    *,
+    stage: str,
+    mode: str,
+    current_content: Any,
+    conversation_history: List[Dict[str, Any]] | None,
+    assistant_message: Dict[str, Any] | None,
+) -> List[Dict[str, Any]] | None:
+    if stage == "quick" or mode == "quick":
+        return build_quick_messages(current_content, conversation_history)
+    if stage == "stage1":
+        return _build_stage1_messages(current_content, conversation_history)
+    if stage == "stage2":
+        stage1_results = (assistant_message or {}).get("stage1") or []
+        if not stage1_results:
+            return None
+        messages, _ = _build_stage2_messages(current_content, stage1_results, conversation_history)
+        return messages
+    if stage == "stage3":
+        stage1_results = (assistant_message or {}).get("stage1") or []
+        stage2_results = (assistant_message or {}).get("stage2") or []
+        if not stage1_results or not stage2_results:
+            return None
+        return build_stage3_messages_with_history(current_content, stage1_results, stage2_results, conversation_history)
+    return None
+
+
+def _rebuilt_provider_request_audit_for_replay(
+    *,
+    conversation_id: str,
+    message_index: int,
+    mode: str,
+    turn: Dict[str, Any] | None,
+    context_package: Dict[str, Any],
+    saved_provider_audit: List[Dict[str, Any]],
+    assistant_message: Dict[str, Any] | None,
+) -> List[Dict[str, Any]]:
+    if not saved_provider_audit:
+        return []
+    audit_context = _provider_audit_context(
+        context_package,
+        conversation_id=conversation_id,
+        mode=mode,
+        user_message_index=message_index,
+        turn_id=turn.get("id") if turn else None,
+    )
+    rebuilt = []
+    conversation_history = _context_messages(context_package)
+    current_content = context_package.get("current_content")
+    for saved in saved_provider_audit:
+        stage = saved.get("stage") or "model"
+        messages = _provider_rebuild_messages(
+            stage=stage,
+            mode=mode,
+            current_content=current_content,
+            conversation_history=conversation_history,
+            assistant_message=assistant_message,
+        )
+        if messages is None:
+            rebuilt.append({
+                "schema": "provider_request_audit_v1",
+                "stage": stage,
+                "model": saved.get("model"),
+                "digest": None,
+                "rebuild_available": False,
+                "rebuild_reason": "Provider messages could not be rebuilt from saved assistant stage data.",
+            })
+            continue
+        preview = saved.get("payload_preview") or {}
+        rebuilt.append(make_provider_request_audit(
+            model=saved.get("model") or preview.get("model") or "unknown",
+            messages=messages,
+            stream=bool(preview.get("stream")),
+            call_kind=saved.get("call_kind") or "replay_rebuild",
+            stage=stage,
+            provider_function="replay_rebuild",
+            source_map=audit_context.get("source_map"),
+            turn_lineage=audit_context.get("turn_lineage"),
+            attempt=saved.get("attempt"),
+            metadata={"replay_rebuild": True, **(audit_context.get("metadata") or {})},
+        ))
+    return rebuilt
+
+
+def _provider_request_digest_comparison(
+    saved_provider_audit: List[Dict[str, Any]],
+    rebuilt_provider_audit: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not saved_provider_audit:
+        return {"available": False, "same_provider_request": False, "reason": "No saved provider_request_audit for this turn."}
+    entries = []
+    max_len = max(len(saved_provider_audit), len(rebuilt_provider_audit))
+    for index in range(max_len):
+        saved = saved_provider_audit[index] if index < len(saved_provider_audit) else None
+        rebuilt = rebuilt_provider_audit[index] if index < len(rebuilt_provider_audit) else None
+        saved_digest = saved.get("digest") if saved else None
+        rebuilt_digest = rebuilt.get("digest") if rebuilt else None
+        entries.append({
+            "index": index,
+            "stage": (saved or rebuilt or {}).get("stage"),
+            "model": (saved or rebuilt or {}).get("model"),
+            "saved_digest": saved_digest,
+            "rebuilt_digest": rebuilt_digest,
+            "match": bool(saved_digest and rebuilt_digest and saved_digest == rebuilt_digest),
+            "rebuild_available": rebuilt_digest is not None,
+            "rebuild_reason": (rebuilt or {}).get("rebuild_reason"),
+        })
+    same = bool(entries) and len(saved_provider_audit) == len(rebuilt_provider_audit) and all(entry["match"] for entry in entries)
+    return {
+        "available": True,
+        "same_provider_request": same,
+        "saved_provider_call_count": len(saved_provider_audit),
+        "rebuilt_provider_call_count": len(rebuilt_provider_audit),
+        "entries": entries,
+    }
+
+
 def _preview_payload(context_package: Dict[str, Any], mode: str, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """Return the auditable next context package without running models."""
+    """Return planned audit-safe context without claiming provider equality."""
     messages = context_package.get("source_messages") or context_package.get("messages") or []
+    context_audit, _ = _context_package_audit(context_package)
     payload = {
         "mode": mode,
+        "payload_kind": "planned_context",
+        "claim": "planned_audit_safe_context_only",
+        "exact_provider_request": False,
+        "provider_request_available": False,
         "messages": messages,
         "message_count": len(messages),
         "snapshot": context_package.get("snapshot") or {},
+        "context_package_audit": context_audit,
     }
     if extra:
         payload.update(extra)
@@ -541,6 +868,7 @@ def _create_turn_record(
     mode: str,
     context_package: Dict[str, Any],
     status: str = "running",
+    provider_request_audit: List[Dict[str, Any]] | None = None,
 ) -> str:
     turn = storage.create_turn_record(
         conversation_id,
@@ -548,9 +876,23 @@ def _create_turn_record(
         assistant_message_index=assistant_message_index,
         mode=mode,
         context_snapshot=context_package.get("snapshot") or {},
-        context_payload=_context_payload(context_package),
+        context_payload=_context_payload(context_package, provider_request_audit),
         status=status,
     )
+    finalized_audit = _finalize_provider_request_audit(
+        provider_request_audit,
+        context_package,
+        conversation_id=conversation_id,
+        mode=mode,
+        user_message_index=user_message_index,
+        turn_id=turn["id"],
+    )
+    if finalized_audit:
+        storage.update_turn_record(
+            conversation_id,
+            turn["id"],
+            context_payload=_context_payload(context_package, finalized_audit),
+        )
     return turn["id"]
 
 
@@ -793,22 +1135,37 @@ async def replay_message_context(conversation_id: str, message_index: int, reque
 
         saved_context_payload = turn.get("context_payload") if turn else None
         if saved_context_payload:
-            saved_messages = (
-                saved_context_payload.get("audit_messages")
-                or saved_context_payload.get("model_messages")
-                or []
-            )
+            saved_messages = _saved_context_audit_messages(saved_context_payload)
+            saved_provider_audit = saved_context_payload.get("provider_request_audit") or []
             saved_snapshot = turn.get("context_snapshot") or {}
             rebuilt_messages = rebuilt_payload.get("messages") or []
             rebuilt_snapshot = rebuilt_payload.get("snapshot") or {}
+            assistant_index = turn.get("assistant_message_index") if turn else None
+            assistant_message = (
+                messages[assistant_index]
+                if isinstance(assistant_index, int) and 0 <= assistant_index < len(messages)
+                else None
+            )
+            rebuilt_provider_audit = _rebuilt_provider_request_audit_for_replay(
+                conversation_id=conversation_id,
+                message_index=message_index,
+                mode=mode,
+                turn=turn,
+                context_package=context_package,
+                saved_provider_audit=saved_provider_audit,
+                assistant_message=assistant_message,
+            )
             return {
                 **rebuilt_payload,
                 **base_extra,
-                "replay_kind": "saved_context_payload",
+                "replay_kind": "saved_provider_request_audit" if saved_provider_audit else "saved_context_payload",
+                "payload_kind": "saved_audit_payload",
                 "messages": saved_messages,
                 "message_count": len(saved_messages),
                 "snapshot": saved_snapshot or rebuilt_snapshot,
                 "saved_context_payload": saved_context_payload,
+                "saved_provider_request_audit": saved_provider_audit,
+                "rebuilt_provider_request_audit": rebuilt_provider_audit,
                 "rebuilt_messages": rebuilt_messages,
                 "rebuilt_message_count": rebuilt_payload.get("message_count") or 0,
                 "rebuilt_snapshot": rebuilt_snapshot,
@@ -817,6 +1174,10 @@ async def replay_message_context(conversation_id: str, message_index: int, reque
                     rebuilt_messages,
                     saved_snapshot,
                     rebuilt_snapshot,
+                ),
+                "provider_digest_comparison": _provider_request_digest_comparison(
+                    saved_provider_audit,
+                    rebuilt_provider_audit,
                 ),
             }
 
@@ -989,11 +1350,22 @@ async def retry_user_message(conversation_id: str, message_index: int, request: 
             mode=mode,
         )
         conversation_history = _context_messages(context_package)
+        provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+            context_package,
+            conversation_id=conversation_id,
+            mode=mode,
+            user_message_index=message_index,
+        )
 
         if mode == "quick":
             stage1_results = []
             stage2_results = []
-            stage3_result = await quick_query(current_content, conversation_history)
+            stage3_result = await quick_query(
+                current_content,
+                conversation_history,
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
+            )
             metadata = _with_context_metadata({
                 "mode": "quick",
                 **(stage3_result.get("metadata") or {}),
@@ -1002,6 +1374,8 @@ async def retry_user_message(conversation_id: str, message_index: int, request: 
             stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
                 current_content,
                 conversation_history=conversation_history,
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             )
             metadata = _with_context_metadata(metadata, context_package, mode="council")
 
@@ -1019,6 +1393,7 @@ async def retry_user_message(conversation_id: str, message_index: int, request: 
             mode=mode,
             context_package=context_package,
             status="complete",
+            provider_request_audit=provider_audit_entries,
         )
         _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
@@ -1093,6 +1468,12 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     # Add user message after building history so the current question is not duplicated
     user_message_index = storage.add_user_message(conversation_id, request.content)
+    provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+        context_package,
+        conversation_id=conversation_id,
+        mode="council",
+        user_message_index=user_message_index,
+    )
 
     # If this is the first message, generate a title
     if is_first_message:
@@ -1101,7 +1482,10 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     # Run the 3-stage council process with conversation history
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
-        request.content, conversation_history
+        request.content,
+        conversation_history,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
     )
 
     metadata = _with_context_metadata(metadata, context_package, mode="council")
@@ -1121,6 +1505,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         mode="council",
         context_package=context_package,
         status="complete",
+        provider_request_audit=provider_audit_entries,
     )
     _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
@@ -1155,6 +1540,12 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
 
     # Add user message after building history so the current question is not duplicated
     user_message_index = storage.add_user_message(conversation_id, request.content)
+    provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+        context_package,
+        conversation_id=conversation_id,
+        mode="quick",
+        user_message_index=user_message_index,
+    )
 
     # If this is the first message, generate a title
     if is_first_message:
@@ -1162,7 +1553,12 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
         storage.update_conversation_title(conversation_id, title)
 
     # Run quick query
-    quick_result = await quick_query(request.content, conversation_history)
+    quick_result = await quick_query(
+        request.content,
+        conversation_history,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
+    )
     metadata = _with_context_metadata({
         "mode": "quick",
         **(quick_result.get("metadata") or {}),
@@ -1183,6 +1579,7 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
         mode="quick",
         context_package=context_package,
         status="complete",
+        provider_request_audit=provider_audit_entries,
     )
     _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
@@ -1243,6 +1640,13 @@ async def send_quick_message_stream(conversation_id: str, request: SendMessageRe
                 mode="quick",
                 context_package=context_package,
             )
+            provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+                context_package,
+                conversation_id=conversation_id,
+                mode="quick",
+                user_message_index=user_message_index,
+                turn_id=turn_id,
+            )
 
             def persist_assistant(updates: Dict[str, Any]) -> None:
                 storage.update_assistant_partial(
@@ -1291,6 +1695,8 @@ async def send_quick_message_stream(conversation_id: str, request: SendMessageRe
                 request.content,
                 conversation_history,
                 event_callback=lambda event: enqueue_and_persist_model_event(quick_queue, event),
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             ))
             async for event_chunk in drain_model_events(quick_task, quick_queue):
                 yield event_chunk
@@ -1310,6 +1716,13 @@ async def send_quick_message_stream(conversation_id: str, request: SendMessageRe
                 "error": None,
             })
             yield f"data: {json.dumps({'type': 'quick_complete', 'data': quick_result, 'metadata': metadata})}\n\n"
+            _persist_turn_context_payload(
+                conversation_id,
+                turn_id,
+                context_package,
+                provider_audit_entries,
+                status="complete",
+            )
             _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
             if title_task:
@@ -1429,6 +1842,14 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 context_package=context_package,
             )
 
+            provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+                context_package,
+                conversation_id=conversation_id,
+                mode="council",
+                user_message_index=user_message_index,
+                turn_id=turn_id,
+            )
+
             def persist_assistant(updates: Dict[str, Any]) -> None:
                 storage.update_assistant_partial(
                     conversation_id,
@@ -1470,6 +1891,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 request.content,
                 conversation_history,
                 event_callback=lambda event: enqueue_and_persist_model_event(stage1_queue, event),
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             ))
             async for event_chunk in drain_model_events(stage1_task, stage1_queue):
                 yield event_chunk
@@ -1507,6 +1930,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 })
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                _persist_turn_context_payload(
+                    conversation_id,
+                    turn_id,
+                    context_package,
+                    provider_audit_entries,
+                    status="complete",
+                )
                 _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
                 if title_task:
@@ -1526,6 +1956,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage1_results,
                 conversation_history,
                 event_callback=lambda event: enqueue_and_persist_model_event(stage2_queue, event),
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             ))
             async for event_chunk in drain_model_events(stage2_task, stage2_queue):
                 yield event_chunk
@@ -1552,6 +1984,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage2_results,
                 conversation_history,
                 event_callback=lambda event: enqueue_and_persist_model_event(stage3_queue, event),
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             ))
             async for event_chunk in drain_model_events(stage3_task, stage3_queue):
                 yield event_chunk
@@ -1562,6 +1996,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 "loading": {"stage3": False},
             })
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+            _persist_turn_context_payload(
+                conversation_id,
+                turn_id,
+                context_package,
+                provider_audit_entries,
+                status="complete",
+            )
             _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
             # Wait for title generation if it was started
@@ -1713,6 +2154,14 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                     mode="council_resume",
                     context_package=context_package,
                 )
+            provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+                context_package,
+                conversation_id=conversation_id,
+                mode="council_resume",
+                user_message_index=user_index,
+                turn_id=turn_id,
+            )
+
             stage1_results = assistant.get("stage1")
             stage2_results = assistant.get("stage2")
 
@@ -1745,6 +2194,8 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                     user_query,
                     conversation_history,
                     event_callback=lambda event: enqueue_and_persist_model_event(stage1_queue, event),
+                    provider_audit_callback=provider_audit_callback,
+                    audit_context=audit_context,
                 ))
                 async for event_chunk in drain_model_events(stage1_task, stage1_queue):
                     yield event_chunk
@@ -1782,6 +2233,13 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                 })
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': metadata})}\n\n"
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                _persist_turn_context_payload(
+                    conversation_id,
+                    turn_id,
+                    context_package,
+                    provider_audit_entries,
+                    status="complete",
+                )
                 _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
                 return
@@ -1804,6 +2262,8 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                     stage1_results,
                     conversation_history,
                     event_callback=lambda event: enqueue_and_persist_model_event(stage2_queue, event),
+                    provider_audit_callback=provider_audit_callback,
+                    audit_context=audit_context,
                 ))
                 async for event_chunk in drain_model_events(stage2_task, stage2_queue):
                     yield event_chunk
@@ -1839,6 +2299,8 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                 stage2_results,
                 conversation_history,
                 event_callback=lambda event: enqueue_and_persist_model_event(stage3_queue, event),
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             ))
             async for event_chunk in drain_model_events(stage3_task, stage3_queue):
                 yield event_chunk
@@ -1850,6 +2312,13 @@ async def resume_message_stream(conversation_id: str, message_index: int):
                 "loading": {"stage3": False},
             })
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+            _persist_turn_context_payload(
+                conversation_id,
+                turn_id,
+                context_package,
+                provider_audit_entries,
+                status="complete",
+            )
             _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
@@ -1937,11 +2406,21 @@ async def send_message_with_files(
             mode=mode,
         )
         conversation_history = _context_messages(context_package)
+        provider_audit_entries, provider_audit_callback, audit_context = _new_provider_audit_collector(
+            context_package,
+            conversation_id=conversation_id,
+            mode=mode,
+        )
 
         if mode == "quick":
             stage1_results = []
             stage2_results = []
-            stage3_result = await quick_query(content_array, conversation_history)
+            stage3_result = await quick_query(
+                content_array,
+                conversation_history,
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
+            )
             metadata = _with_context_metadata({
                 "mode": "quick",
                 **(stage3_result.get("metadata") or {}),
@@ -1949,7 +2428,9 @@ async def send_message_with_files(
         else:
             stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
                 content_array,
-                conversation_history=conversation_history
+                conversation_history=conversation_history,
+                provider_audit_callback=provider_audit_callback,
+                audit_context=audit_context,
             )
             metadata = _with_context_metadata(metadata, context_package, mode="council")
 
@@ -1975,6 +2456,7 @@ async def send_message_with_files(
             mode=mode,
             context_package=context_package,
             status="complete",
+            provider_request_audit=provider_audit_entries,
         )
         _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 

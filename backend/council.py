@@ -166,14 +166,19 @@ def _format_stage3_failure(primary_model: str, response: Dict[str, Any] | None, 
     return result
 
 
-async def _query_chairman_with_fallbacks(messages: List[Dict[str, Any]], event_callback=None) -> Dict[str, Any]:
+async def _query_chairman_with_fallbacks(
+    messages: List[Dict[str, Any]],
+    event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Query chairman synthesis candidates until one returns content."""
     candidates = _chairman_model_candidates()
     primary_model = candidates[0] if candidates else model_name("chairman_model")
     attempts = []
     last_response = None
 
-    for model in candidates:
+    for attempt_index, model in enumerate(candidates):
         await _emit_stage_event(event_callback, {
             "type": "stage3_model_start",
             "stage": "stage3",
@@ -190,7 +195,19 @@ async def _query_chairman_with_fallbacks(messages: List[Dict[str, Any]], event_c
                 "model": current_model,
             })
 
-        response = await query_model(model, messages, event_callback=on_model_event)
+        response = await query_model(
+            model,
+            messages,
+            event_callback=on_model_event,
+            **_provider_audit_kwargs(
+                provider_audit_callback,
+                audit_context,
+                call_kind="council_chairman",
+                stage="stage3",
+                provider_function="_query_chairman_with_fallbacks",
+                attempt={"index": attempt_index + 1, "total": len(candidates), "fallback": attempt_index > 0},
+            ),
+        )
         last_response = response
         attempt = _format_stage3_attempt(model, response)
         attempts.append(attempt)
@@ -255,6 +272,17 @@ async def _emit_stage_event(event_callback, event: Dict[str, Any]) -> None:
         await result
 
 
+def _provider_audit_kwargs(provider_audit_callback=None, audit_context: Dict[str, Any] | None = None, **kwargs) -> Dict[str, Any]:
+    """Return provider audit kwargs only when a collector is active."""
+    if not provider_audit_callback and not audit_context:
+        return {}
+    return {
+        "provider_audit_callback": provider_audit_callback,
+        "audit_context": audit_context,
+        **kwargs,
+    }
+
+
 def _build_stage1_messages(
     user_query: Union[str, List[Dict[str, Any]]],
     conversation_history: List[Dict[str, Any]] = None,
@@ -274,6 +302,33 @@ def _build_stage1_messages(
 
         if isinstance(user_query, str):
             context_text += f"Current question: {user_query}\n\nPlease provide your response considering the conversation history."
+            return [{"role": "user", "content": context_text}]
+
+        context_item = {"type": "text", "text": f"{context_text}\n\n"}
+        return [{"role": "user", "content": [context_item, *user_query]}]
+
+    return [{"role": "user", "content": user_query}]
+
+
+def build_quick_messages(
+    user_query: Union[str, List[Dict[str, Any]]],
+    conversation_history: List[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Build the exact provider messages used by quick mode."""
+    if conversation_history:
+        context_text = "Previous conversation context:\n\n"
+        for msg in conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
+                content_text = ' '.join(text_parts)
+            else:
+                content_text = content
+            context_text += f"{role}: {content_text}\n\n"
+
+        if isinstance(user_query, str):
+            context_text += f"Current question: {user_query}"
             return [{"role": "user", "content": context_text}]
 
         context_item = {"type": "text", "text": f"{context_text}\n\n"}
@@ -360,6 +415,8 @@ async def _query_stage_model_with_events(
     messages: List[Dict[str, Any]],
     formatter,
     event_callback,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Query one model and emit lifecycle status events."""
     await _emit_stage_event(event_callback, {
@@ -378,7 +435,19 @@ async def _query_stage_model_with_events(
             **event,
         })
 
-    response = await query_model(model, messages, event_callback=on_model_event)
+    response = await query_model(
+        model,
+        messages,
+        event_callback=on_model_event,
+        **_provider_audit_kwargs(
+            provider_audit_callback,
+            audit_context,
+            call_kind=f"council_{stage}",
+            stage=stage,
+            provider_function="_query_stage_models_streaming",
+            attempt={"index": index + 1, "fallback": False},
+        ),
+    )
     formatted = formatter(model, response)
     event_type = f"{stage}_model_failed" if formatted.get("status") == "failed" else f"{stage}_model_complete"
     await _emit_stage_event(event_callback, {
@@ -402,6 +471,8 @@ async def _query_stage_models_streaming(
     messages: List[Dict[str, Any]],
     formatter,
     event_callback,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Query stage models concurrently while emitting per-model progress."""
     tasks = [
@@ -412,6 +483,8 @@ async def _query_stage_models_streaming(
             messages=messages,
             formatter=formatter,
             event_callback=event_callback,
+            provider_audit_callback=provider_audit_callback,
+            audit_context=audit_context,
         ))
         for index, model in enumerate(models)
     ]
@@ -751,7 +824,9 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
 
 async def stage1_collect_responses_with_history(
     user_query: Union[str, List[Dict[str, Any]]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Stage 1 with optional conversation history context.
@@ -767,7 +842,16 @@ async def stage1_collect_responses_with_history(
 
     # Query all models in parallel
     council_models = get_council_models()
-    responses = await query_models_parallel(council_models, messages)
+    responses = await query_models_parallel(
+        council_models,
+        messages,
+        **_provider_audit_kwargs(
+            provider_audit_callback,
+            audit_context,
+            call_kind="council_stage1",
+            stage="stage1",
+        ),
+    )
 
     # Format results with full Response API metadata and failure status.
     stage1_results = [
@@ -783,6 +867,8 @@ async def stage1_collect_responses_streaming(
     conversation_history: List[Dict[str, Any]] = None,
     council_models: List[str] | None = None,
     event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Stage 1 with per-model status events for SSE callers."""
     messages = _build_stage1_messages(user_query, conversation_history)
@@ -793,13 +879,17 @@ async def stage1_collect_responses_streaming(
         messages=messages,
         formatter=_format_stage1_result,
         event_callback=event_callback,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
     )
 
 
 async def stage2_collect_rankings_with_history(
     user_query: Union[str, List[Dict[str, Any]]],
     stage1_results: List[Dict[str, Any]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2 with optional conversation history context.
@@ -816,7 +906,16 @@ async def stage2_collect_rankings_with_history(
 
     # Query all models in parallel
     council_models = get_council_models()
-    responses = await query_models_parallel(council_models, messages)
+    responses = await query_models_parallel(
+        council_models,
+        messages,
+        **_provider_audit_kwargs(
+            provider_audit_callback,
+            audit_context,
+            call_kind="council_stage2",
+            stage="stage2",
+        ),
+    )
 
     # Format results with full Response API metadata and failure status.
     stage2_results = [
@@ -833,6 +932,8 @@ async def stage2_collect_rankings_streaming(
     conversation_history: List[Dict[str, Any]] = None,
     council_models: List[str] | None = None,
     event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Stage 2 with per-model status events for SSE callers."""
     messages, label_to_model = _build_stage2_messages(user_query, stage1_results, conversation_history)
@@ -843,47 +944,33 @@ async def stage2_collect_rankings_streaming(
         messages=messages,
         formatter=_format_stage2_result,
         event_callback=event_callback,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
     )
     return stage2_results, label_to_model
 
 
-async def stage3_synthesize_final_with_history(
+def build_stage3_messages_with_history(
     user_query: Union[str, List[Dict[str, Any]]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     conversation_history: List[Dict[str, Any]] = None,
-    event_callback=None,
-) -> Dict[str, Any]:
-    """
-    Stage 3 with conversation history context.
-
-    Args:
-        user_query: The user's question (text or multimodal content array)
-        stage1_results: Results from Stage 1
-        stage2_results: Results from Stage 2
-        conversation_history: List of previous conversation messages
-
-    Returns:
-        Dict with 'model' and 'response' keys
-    """
-    # Extract text from user_query if it's multimodal
+) -> List[Dict[str, Any]]:
+    """Build the exact provider messages used by council stage 3."""
     if isinstance(user_query, str):
         query_text = user_query
         has_files = False
     else:
-        # Extract text parts from multimodal content
         text_parts = [q.get('text', '') for q in user_query if q.get('type') == 'text']
         query_text = ' '.join(text_parts)
         has_files = any(q.get('type') == 'image_url' for q in user_query)
 
-    # Build synthesis prompt with conversation context
     prompt_parts = []
 
     if conversation_history:
         prompt_parts.append("Conversation History:")
         for msg in conversation_history:
             role = "User" if msg["role"] == "user" else "Assistant"
-            # Extract text from multimodal content
             content = msg.get('content', '')
             if isinstance(content, list):
                 text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
@@ -899,7 +986,6 @@ async def stage3_synthesize_final_with_history(
         f"Question: {query_text}",
     ])
 
-    # Note about file attachments
     if has_files:
         prompt_parts.append("(Note: This question includes file attachments which have been processed separately)")
     prompt_parts.append("")
@@ -909,7 +995,6 @@ async def stage3_synthesize_final_with_history(
         "STAGE 1 - Individual Responses:",
     ])
 
-    # Add individual model responses with attribution
     for result in _successful_stage1_results(stage1_results):
         prompt_parts.append(f"**{result['model']}:**")
         prompt_parts.append(result['response'])
@@ -919,13 +1004,11 @@ async def stage3_synthesize_final_with_history(
         "STAGE 2 - Peer Rankings:",
     ])
 
-    # Add peer rankings
     for result in _successful_stage2_results(stage2_results):
         prompt_parts.append(f"**{result['model']}:**")
         prompt_parts.append(result['ranking'])
         prompt_parts.append("")
 
-    # Add synthesis instructions with conversation context
     if conversation_history:
         prompt_parts.extend([
             "Please synthesize a comprehensive response to the current question that:",
@@ -946,15 +1029,50 @@ async def stage3_synthesize_final_with_history(
             "Your response should reflect the collective wisdom of the council while addressing the user's question directly."
         ])
 
-    # Create final prompt
-    messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
+    return [{"role": "user", "content": "\n".join(prompt_parts)}]
 
-    return await _query_chairman_with_fallbacks(messages, event_callback=event_callback)
+
+async def stage3_synthesize_final_with_history(
+    user_query: Union[str, List[Dict[str, Any]]],
+    stage1_results: List[Dict[str, Any]],
+    stage2_results: List[Dict[str, Any]],
+    conversation_history: List[Dict[str, Any]] = None,
+    event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Stage 3 with conversation history context.
+
+    Args:
+        user_query: The user's question (text or multimodal content array)
+        stage1_results: Results from Stage 1
+        stage2_results: Results from Stage 2
+        conversation_history: List of previous conversation messages
+
+    Returns:
+        Dict with 'model' and 'response' keys
+    """
+    messages = build_stage3_messages_with_history(
+        user_query,
+        stage1_results,
+        stage2_results,
+        conversation_history,
+    )
+
+    return await _query_chairman_with_fallbacks(
+        messages,
+        event_callback=event_callback,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
+    )
 
 
 async def run_full_council_with_history(
     user_query: Union[str, List[Dict[str, Any]]],
-    conversation_history: List[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, Any]] = None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process with conversation history support.
@@ -967,7 +1085,12 @@ async def run_full_council_with_history(
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
     # Stage 1: Collect individual responses with history context
-    stage1_results = await stage1_collect_responses_with_history(user_query, conversation_history)
+    stage1_results = await stage1_collect_responses_with_history(
+        user_query,
+        conversation_history,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
+    )
 
     # If no models responded successfully, return error while preserving failures.
     if not has_successful_stage1_results(stage1_results):
@@ -978,7 +1101,11 @@ async def run_full_council_with_history(
 
     # Stage 2: Collect rankings with history context
     stage2_results, label_to_model = await stage2_collect_rankings_with_history(
-        user_query, stage1_results, conversation_history
+        user_query,
+        stage1_results,
+        conversation_history,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
     )
 
     # Calculate aggregate rankings
@@ -986,7 +1113,12 @@ async def run_full_council_with_history(
 
     # Stage 3: Synthesize final answer with history context
     stage3_result = await stage3_synthesize_final_with_history(
-        user_query, stage1_results, stage2_results, conversation_history
+        user_query,
+        stage1_results,
+        stage2_results,
+        conversation_history,
+        provider_audit_callback=provider_audit_callback,
+        audit_context=audit_context,
     )
 
     # Prepare metadata
@@ -1003,6 +1135,8 @@ async def quick_query(
     user_query: Union[str, List[Dict[str, Any]]],
     conversation_history: List[Dict[str, Any]] = None,
     event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Quick single-model query without the 3-stage council process.
@@ -1017,38 +1151,7 @@ async def quick_query(
     quick_model = model_name("quick_model")
     quick_models = [quick_model, *model_list("quick_fallback_models")]
 
-    # Build messages with conversation context
-    messages = []
-
-    if conversation_history:
-        # Add conversation context
-        context_text = "Previous conversation context:\n\n"
-        for msg in conversation_history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            # Extract text from multimodal content
-            content = msg.get('content', '')
-            if isinstance(content, list):
-                text_parts = [c.get('text', '') for c in content if c.get('type') == 'text']
-                content_text = ' '.join(text_parts)
-            else:
-                content_text = content
-            context_text += f"{role}: {content_text}\n\n"
-
-        # Handle user_query based on type
-        if isinstance(user_query, str):
-            context_text += f"Current question: {user_query}"
-            messages.append({"role": "user", "content": context_text})
-        else:
-            # Multimodal content array
-            # Prepend context as first text item
-            context_item = {"type": "text", "text": f"{context_text}\n\n"}
-            messages.append({"role": "user", "content": [context_item, *user_query]})
-    else:
-        # No conversation history
-        if isinstance(user_query, str):
-            messages = [{"role": "user", "content": user_query}]
-        else:
-            messages = [{"role": "user", "content": user_query}]
+    messages = build_quick_messages(user_query, conversation_history)
 
     attempts = []
     for model in [model for model in quick_models if model]:
@@ -1068,7 +1171,19 @@ async def quick_query(
                 "model": model,
             })
 
-        response = await query_model(model, messages, event_callback=on_model_event)
+        response = await query_model(
+            model,
+            messages,
+            event_callback=on_model_event,
+            **_provider_audit_kwargs(
+                provider_audit_callback,
+                audit_context,
+                call_kind="quick",
+                stage="quick",
+                provider_function="quick_query",
+                attempt={"index": len(attempts) + 1, "total": len([candidate for candidate in quick_models if candidate]), "fallback": bool(attempts)},
+            ),
+        )
         attempt = {"model": model, "ok": bool(response and response.get("content"))}
         if response and response.get("status") == "failed":
             attempt["error_type"] = response.get("error_type")

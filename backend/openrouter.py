@@ -7,6 +7,7 @@ import time
 import httpx
 from typing import List, Dict, Any, Optional
 from .llm_settings import resolve_model_config
+from .provider_audit import emit_provider_request_audit, make_provider_request_audit
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,12 @@ async def query_model(
     messages: List[Dict[str, Any]],
     timeout: Optional[float] = None,
     event_callback=None,
+    provider_audit_callback=None,
+    audit_context: Optional[Dict[str, Any]] = None,
+    call_kind: str = "model",
+    stage: str = "model",
+    provider_function: str = "query_model",
+    attempt: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Query a single model via OpenRouter API.
@@ -252,7 +259,24 @@ async def query_model(
             )
 
         request_timeout = timeout if timeout is not None else model_config["timeout"]
-        if model_config.get("stream", True):
+        stream = bool(model_config.get("stream", True))
+        audit_context = audit_context or {}
+        await emit_provider_request_audit(
+            provider_audit_callback,
+            make_provider_request_audit(
+                model=model,
+                messages=messages,
+                stream=stream,
+                call_kind=call_kind,
+                stage=stage,
+                provider_function=provider_function,
+                source_map=audit_context.get("source_map"),
+                turn_lineage=audit_context.get("turn_lineage"),
+                attempt=attempt,
+                metadata=audit_context.get("metadata"),
+            ),
+        )
+        if stream:
             return await _query_model_streaming(model, model_config, messages, request_timeout, start, event_callback)
 
         return await _query_model_non_streaming(model, model_config, messages, request_timeout, start)
@@ -330,7 +354,11 @@ async def query_model(
 
 async def query_models_parallel(
     models: List[str],
-    messages: List[Dict[str, Any]]
+    messages: List[Dict[str, Any]],
+    provider_audit_callback=None,
+    audit_context: Optional[Dict[str, Any]] = None,
+    call_kind: str = "parallel_model",
+    stage: str = "model",
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """
     Query multiple models in parallel.
@@ -346,7 +374,27 @@ async def query_models_parallel(
     import asyncio
 
     # Create tasks for all models
-    tasks = [query_model(model, messages) for model in models]
+    audit_context = audit_context or {}
+    tasks = [
+        query_model(
+            model,
+            messages,
+            provider_audit_callback=provider_audit_callback,
+            audit_context={
+                **audit_context,
+                "metadata": {
+                    **(audit_context.get("metadata") or {}),
+                    "parallel_index": index,
+                    "parallel_model_count": len(models),
+                },
+            },
+            call_kind=call_kind,
+            stage=stage,
+            provider_function="query_models_parallel",
+            attempt={"index": index + 1, "total": len(models), "fallback": False},
+        )
+        for index, model in enumerate(models)
+    ]
 
     # Wait for all to complete
     responses = await asyncio.gather(*tasks)
@@ -358,12 +406,27 @@ async def query_models_parallel(
 async def query_model_with_fallbacks(
     models: List[str],
     messages: List[Dict[str, Any]],
-    timeout: Optional[float] = None
+    timeout: Optional[float] = None,
+    provider_audit_callback=None,
+    audit_context: Optional[Dict[str, Any]] = None,
+    call_kind: str = "fallback_model",
+    stage: str = "model",
 ) -> Dict[str, Any]:
     """Try models in order and return the first successful response with attempts."""
     attempts = []
-    for model in [model for model in models if model]:
-        response = await query_model(model, messages, timeout=timeout)
+    active_models = [model for model in models if model]
+    for index, model in enumerate(active_models):
+        response = await query_model(
+            model,
+            messages,
+            timeout=timeout,
+            provider_audit_callback=provider_audit_callback,
+            audit_context=audit_context,
+            call_kind=call_kind,
+            stage=stage,
+            provider_function="query_model_with_fallbacks",
+            attempt={"index": index + 1, "total": len(active_models), "fallback": index > 0},
+        )
         attempt = {"model": model, "ok": bool(response and response.get("content"))}
         if response and response.get("status") == "failed":
             attempt["error_type"] = response.get("error_type")
