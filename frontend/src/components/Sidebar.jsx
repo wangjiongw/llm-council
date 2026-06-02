@@ -50,7 +50,14 @@ export default function Sidebar({
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
   const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
+  const activeGroupLabel = useMemo(() => {
+    const activeGroup = conversationGroups.find((group) =>
+      group.conversations.some((conversation) => conversation.id === currentConversationId)
+    );
+    return activeGroup?.label || '';
+  }, [conversationGroups, currentConversationId]);
 
   const handleStartEdit = (conv) => {
     setEditingId(conv.id);
@@ -81,6 +88,20 @@ export default function Sidebar({
     onDeleteConversation(conversationId);
   };
 
+  const toggleGroupCollapsed = (label) => {
+    if (label === activeGroupLabel) return;
+
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(label)) {
+        next.delete(label);
+      } else {
+        next.add(label);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
@@ -108,13 +129,27 @@ export default function Sidebar({
         {conversations.length === 0 ? (
           <div className="no-conversations">No conversations yet</div>
         ) : (
-          conversationGroups.map((group) => (
-            <section className="conversation-group" key={group.label}>
-              <div className="conversation-group-header">
-                <span>{group.label}</span>
-                <span>{group.conversations.length}</span>
-              </div>
-              {group.conversations.map((conv) => (
+          conversationGroups.map((group) => {
+            const isActiveGroup = group.label === activeGroupLabel;
+            const isCollapsed = !isActiveGroup && collapsedGroups.has(group.label);
+
+            return (
+              <section className={`conversation-group ${isCollapsed ? 'collapsed' : ''}`} key={group.label}>
+                <button
+                  type="button"
+                  className="conversation-group-header"
+                  onClick={() => toggleGroupCollapsed(group.label)}
+                  aria-expanded={!isCollapsed}
+                  disabled={isActiveGroup}
+                  title={isActiveGroup ? 'Current conversation group stays expanded' : isCollapsed ? 'Expand group' : 'Collapse group'}
+                >
+                  <span className="conversation-group-title">
+                    <span className="conversation-group-caret" aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>
+                    {group.label}
+                  </span>
+                  <span className="conversation-group-count">{group.conversations.length}</span>
+                </button>
+                {!isCollapsed && group.conversations.map((conv) => (
                 <div
                   key={conv.id}
                   className={`conversation-item ${
@@ -187,9 +222,10 @@ export default function Sidebar({
                     </>
                   )}
                 </div>
-              ))}
-            </section>
-          ))
+                ))}
+              </section>
+            );
+          })
         )}
       </div>
     </div>
