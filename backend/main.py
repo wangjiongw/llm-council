@@ -55,6 +55,7 @@ class ContextPreviewRequest(BaseModel):
 class RetryMessageRequest(BaseModel):
     """Request to retry a stored user message without duplicating it."""
     mode: str | None = None
+    edited_content: str | None = None
 
 
 class ContextReplayRequest(BaseModel):
@@ -277,6 +278,19 @@ def _persistent_user_content(content: Any) -> Any:
         "stored_text_chars": 0,
     }
     return _audit_safe_content(content, stats)
+
+
+def _content_with_edited_text(
+    original_content: str | List[Dict[str, Any]],
+    edited_text: str,
+) -> str | List[Dict[str, Any]]:
+    if not isinstance(original_content, list):
+        return edited_text
+
+    non_text_items = [copy.deepcopy(item) for item in original_content if item.get("type") != "text"]
+    if edited_text.strip():
+        return [{"type": "text", "text": edited_text}, *non_text_items]
+    return non_text_items
 
 
 def _attachment_path(conversation_id: str, attachment_id: str) -> Path:
@@ -1342,7 +1356,19 @@ async def retry_user_message(conversation_id: str, message_index: int, request: 
 
     try:
         storage.truncate_conversation_messages(conversation_id, message_index + 1)
-        current_content = _restore_attachment_content(user_message.get("content", ""))
+        current_content_for_storage = user_message.get("content", "")
+        if request.edited_content is not None:
+            current_content_for_storage = _content_with_edited_text(
+                current_content_for_storage,
+                request.edited_content,
+            )
+            storage.update_user_message_content(
+                conversation_id,
+                message_index,
+                current_content_for_storage,
+            )
+
+        current_content = _restore_attachment_content(current_content_for_storage)
         context_package = await _build_context_package_for_request(
             conversation_id,
             before_index=message_index,

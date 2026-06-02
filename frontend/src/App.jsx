@@ -408,28 +408,35 @@ function App() {
     }
   };
 
-  const handleRetryLastQuery = async () => {
+  const handleRetryLastQuery = async (options = {}) => {
     if (!currentConversationId || !currentConversation?.messages || isLoading) return;
 
     const messages = [...currentConversation.messages];
     let lastUserMessage = null;
     let lastUserIndex = -1;
 
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        lastUserMessage = messages[i];
-        lastUserIndex = i;
-        break;
+    if (typeof options.messageIndex === 'number') {
+      lastUserIndex = options.messageIndex;
+      lastUserMessage = messages[lastUserIndex];
+    } else {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') {
+          lastUserMessage = messages[i];
+          lastUserIndex = i;
+          break;
+        }
       }
     }
 
-    if (!lastUserMessage || lastUserIndex < 0) {
+    if (!lastUserMessage || lastUserIndex < 0 || lastUserMessage.role !== 'user') {
       console.error('No user message found to retry');
       return;
     }
 
     const nextAssistant = messages.slice(lastUserIndex + 1).find(msg => msg.role === 'assistant');
-    const retryMode = nextAssistant?.metadata?.mode === 'quick' ? 'quick' : 'council';
+    const inferredMode = nextAssistant?.metadata?.mode === 'quick' ? 'quick' : 'council';
+    const retryMode = options.mode || inferredMode;
+    const editedContent = typeof options.editedContent === 'string' ? options.editedContent : null;
 
     setIsLoading(true);
     const requestId = `retry-${Date.now()}`;
@@ -437,13 +444,19 @@ function App() {
     setInFlightDraft(null);
     setDraftToRestore(null);
 
-    setCurrentConversation((prev) => ({
-      ...prev,
-      messages: prev.messages.slice(0, lastUserIndex + 1),
-    }));
+    setCurrentConversation((prev) => {
+      const nextMessages = prev.messages.slice(0, lastUserIndex + 1);
+      if (editedContent !== null && nextMessages[lastUserIndex]) {
+        nextMessages[lastUserIndex] = {
+          ...nextMessages[lastUserIndex],
+          content: editedContent,
+        };
+      }
+      return { ...prev, messages: nextMessages };
+    });
 
     try {
-      const response = await api.retryMessage(currentConversationId, lastUserIndex, retryMode);
+      const response = await api.retryMessage(currentConversationId, lastUserIndex, retryMode, editedContent);
       if (response.conversation) {
         setCurrentConversation(response.conversation);
       } else {
@@ -952,6 +965,7 @@ function App() {
         onToggleMessagePin={handleToggleMessagePin}
         onToggleMessageContextExcluded={handleToggleMessageContextExcluded}
         onForkConversation={handleForkConversation}
+        onOpenSettings={() => setSettingsOpen(true)}
         isLoading={isLoading}
         activeStreamId={activeStreamId}
         attachedFiles={attachedFiles}

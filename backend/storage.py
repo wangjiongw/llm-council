@@ -398,6 +398,29 @@ def add_user_message(
         return message_index
 
 
+def update_user_message_content(
+    conversation_id: str,
+    message_index: int,
+    content: Union[str, List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Replace the content of an existing user message."""
+    with _conversation_lock(conversation_id):
+        conversation = get_conversation(conversation_id)
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
+        messages = conversation.get("messages", [])
+        if message_index < 0 or message_index >= len(messages):
+            raise ValueError("Message index out of range")
+
+        if messages[message_index].get("role") != "user":
+            raise ValueError("Selected message is not a user message")
+
+        messages[message_index]["content"] = content
+        save_conversation(conversation)
+        return conversation
+
+
 def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],

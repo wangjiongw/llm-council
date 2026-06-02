@@ -65,6 +65,42 @@ class RetryMessageApiTest(unittest.TestCase):
         quick_mock.assert_awaited_once()
         self.assertIsNone(quick_mock.call_args.args[1])
 
+    def test_retry_with_edit_updates_user_message_before_regeneration(self):
+        storage.add_user_message("conv-1", "old prompt")
+        storage.add_assistant_message(
+            "conv-1",
+            [],
+            [],
+            {"model": "quick-old", "status": "success", "response": "old answer"},
+            metadata={"mode": "quick"},
+        )
+
+        captured = {}
+
+        async def fake_quick(content, conversation_history=None, event_callback=None, **_kwargs):
+            captured["content"] = content
+            return {
+                "model": "quick-new",
+                "status": "success",
+                "response": "edited answer",
+                "metadata": {"attempts": [{"model": "quick-new", "ok": True}]},
+            }
+
+        with patch("backend.main.quick_query", new=fake_quick):
+            response = self.client.post(
+                "/api/conversations/conv-1/messages/0/retry",
+                json={"mode": "quick", "edited_content": "new edited prompt"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        conversation = storage.get_conversation("conv-1")
+        self.assertEqual([message["role"] for message in conversation["messages"]], ["user", "assistant"])
+        self.assertEqual(conversation["messages"][0]["content"], "new edited prompt")
+        self.assertEqual(conversation["messages"][1]["stage3"]["response"], "edited answer")
+        self.assertEqual(captured["content"], "new edited prompt")
+        self.assertNotIn("old prompt", str(conversation))
+        self.assertNotIn("old answer", str(conversation))
+
     def test_retry_uses_prior_context_before_user_message(self):
         storage.add_user_message("conv-1", "first")
         storage.add_assistant_message(

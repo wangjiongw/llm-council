@@ -478,8 +478,12 @@ export const api = {
   /**
    * Retry a stored user message without appending a duplicate user turn.
    */
-  async retryMessage(conversationId, messageIndex, mode = null) {
+  async retryMessage(conversationId, messageIndex, mode = null, editedContent = null) {
     const controller = startAbortableRequest();
+    const payload = { mode };
+    if (editedContent !== null) {
+      payload.edited_content = editedContent;
+    }
 
     try {
       const response = await fetch(
@@ -489,7 +493,7 @@ export const api = {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ mode }),
+          body: JSON.stringify(payload),
           signal: controller.signal,
         }
       );
