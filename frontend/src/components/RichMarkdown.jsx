@@ -62,6 +62,8 @@ const CODE_FILE_EXTENSIONS = {
   text: 'txt',
 };
 
+const PLAIN_TEXT_LANGUAGES = new Set(['text', 'txt', 'plain', 'plaintext']);
+
 let katexPromise;
 let highlightPromise;
 let mermaidPromise;
@@ -209,6 +211,14 @@ const diffLineClass = (line) => {
   return '';
 };
 
+const textFromChildren = (children) => {
+  if (children === null || children === undefined) return '';
+  if (typeof children === 'string' || typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(textFromChildren).join('');
+  if (children?.props?.children !== undefined) return textFromChildren(children.props.children);
+  return '';
+};
+
 function CopyControl({ content, label = 'Copy' }) {
   const [copied, setCopied] = useState(false);
 
@@ -226,9 +236,13 @@ function CopyControl({ content, label = 'Copy' }) {
   );
 }
 
-function normalizeLanguage(className = '') {
+function rawLanguage(className = '') {
   const match = /language-([^\s]+)/.exec(className);
-  const language = (match?.[1] || '').toLowerCase();
+  return (match?.[1] || '').toLowerCase();
+}
+
+function normalizeLanguage(className = '') {
+  const language = rawLanguage(className);
   return COMMON_LANGUAGE_ALIASES[language] || language || 'text';
 }
 
@@ -284,6 +298,7 @@ function useHighlightedCode(code, language, mode, enabled = true) {
 
 function CodeBlock({ className, children, mode }) {
   const code = String(children || '').replace(/\n$/, '');
+  const rawLang = rawLanguage(className);
   const language = normalizeLanguage(className);
   const lineCount = Math.max(1, code.split('\n').length);
   const isLongCode = mode === 'full' && lineCount > LONG_CODE_LINES;
@@ -298,6 +313,10 @@ function CodeBlock({ className, children, mode }) {
 
   if (language === 'mermaid') {
     return <MermaidBlock code={code} mode={mode} />;
+  }
+
+  if (rawLang && PLAIN_TEXT_LANGUAGES.has(language)) {
+    return <PlainTextBlock code={code} />;
   }
 
   return (
@@ -344,6 +363,10 @@ function CodeBlock({ className, children, mode }) {
       )}
     </div>
   );
+}
+
+function PlainTextBlock({ code }) {
+  return <div className="rich-plain-text-block">{code}</div>;
 }
 
 function useMermaidSvg(code, mode) {
@@ -583,7 +606,9 @@ function MarkdownTable({ children }) {
   const tableAs = (format) => {
     const rows = rowsForExport();
     const serialized = rows.map(row => {
-      const cells = Array.from(row.querySelectorAll('th,td')).map(cell => cell.textContent.trim());
+      const cells = Array.from(row.querySelectorAll('th,td')).map(cell => (
+        cell.dataset.plainText || cell.textContent.trim()
+      ));
       if (format === 'csv') {
         return cells.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',');
       }
@@ -830,9 +855,12 @@ function RichMarkdown({ content, mode = 'full', className = '' }) {
     [effectiveMode, source]
   );
   const components = useMemo(() => ({
-    code({ inline, className: codeClassName, children }) {
-      if (inline) {
-        return <code className={codeClassName}>{children}</code>;
+    code({ inline, node, className: codeClassName, children }) {
+      const hasLanguage = Boolean(rawLanguage(codeClassName));
+      const isSingleLineCode = node?.position?.start?.line === node?.position?.end?.line;
+      const isInlineCode = inline ?? (!hasLanguage && isSingleLineCode);
+      if (isInlineCode) {
+        return <code className={`rich-inline-code ${codeClassName || ''}`.trim()}>{children}</code>;
       }
       return <CodeBlock className={codeClassName} mode={effectiveMode}>{children}</CodeBlock>;
     },
@@ -846,10 +874,10 @@ function RichMarkdown({ content, mode = 'full', className = '' }) {
       return <InlineMathContainer as="li" mode={effectiveMode} {...props} />;
     },
     td(props) {
-      return <InlineMathContainer as="td" mode={effectiveMode} {...props} />;
+      return <InlineMathContainer as="td" mode={effectiveMode} data-plain-text={textFromChildren(props.children).trim()} {...props} />;
     },
     th(props) {
-      return <InlineMathContainer as="th" mode={effectiveMode} {...props} />;
+      return <InlineMathContainer as="th" mode={effectiveMode} data-plain-text={textFromChildren(props.children).trim()} {...props} />;
     },
     img: ImageRenderer,
   }), [effectiveMode]);

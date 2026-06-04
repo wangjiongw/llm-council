@@ -32,6 +32,26 @@ describe('RichMarkdown', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('"Beta","10"'));
   });
 
+  it('keeps backticked table text inline and copies clean table values', async () => {
+    const { container } = render(<RichMarkdown content={`| Kind | Value |\n| --- | --- |\n| Mode | \`text\` |`} />);
+
+    expect(await screen.findByText('Table')).toBeInTheDocument();
+    expect(container.querySelector('.rich-table-scroll .rich-code-block')).toBeNull();
+    expect(container.querySelector('.rich-table-scroll .rich-inline-code')).toHaveTextContent('text');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Copy CSV' }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('"Kind","Value"\n"Mode","text"');
+  });
+
+  it('renders explicit text fences as plain text instead of full code tools', async () => {
+    const { container } = render(<RichMarkdown content={`Before\n\n\`\`\`text\nplain text only\n\`\`\`\n\nAfter`} />);
+
+    expect(await screen.findByText('plain text only')).toHaveClass('rich-plain-text-block');
+    expect(container.querySelector('.rich-code-block')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy code' })).not.toBeInTheDocument();
+  });
+
   it('renders diff code with line classes and download control', async () => {
     render(<RichMarkdown content={`\`\`\`diff\n@@ hunk\n+added\n-removed\n\`\`\``} />);
 
