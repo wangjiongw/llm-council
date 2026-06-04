@@ -16,7 +16,12 @@ class ConversationSearchApiTest(unittest.TestCase):
 
         storage.create_conversation("conv-1")
         storage.update_conversation_title("conv-1", "Context design notes")
-        storage.add_user_message("conv-1", "How should a stateless model API receive history?")
+        storage.update_conversation_metadata("conv-1", {"favorite": True, "tags": ["context"], "pinned": True})
+        storage.add_user_message(
+            "conv-1",
+            "How should a stateless model API receive history?",
+            files=[{"name": "history.md", "type": "text/markdown"}],
+        )
         storage.add_assistant_message(
             "conv-1",
             [],
@@ -53,6 +58,12 @@ class ConversationSearchApiTest(unittest.TestCase):
         self.assertEqual(assistant_matches[0]["conversation_id"], "conv-1")
         self.assertEqual(assistant_matches[0]["message_index"], 1)
         self.assertIn("server owns context", assistant_matches[0]["content"])
+        self.assertEqual(assistant_matches[0]["mode"], "quick")
+        self.assertTrue(assistant_matches[0]["favorite"])
+        self.assertTrue(assistant_matches[0]["conversation_pinned"])
+        self.assertIn("context", assistant_matches[0]["tags"])
+        self.assertIn("quick", assistant_matches[0]["modes"])
+        self.assertTrue(assistant_matches[0]["has_files"])
 
     def test_search_conversations_rejects_empty_query(self):
         response = self.client.get("/api/conversations/search", params={"q": "   "})

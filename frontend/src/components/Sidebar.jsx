@@ -1,6 +1,47 @@
 import { useEffect, useMemo, useState } from 'react';
 import './Sidebar.css';
 
+
+const SIDEBAR_STATE_STORAGE_KEY = 'llm-council:sidebar-state:v2';
+const DEFAULT_SIDEBAR_STATE = {
+  viewMode: 'active',
+  favoriteOnly: false,
+  tagFilter: '',
+  historySearchQuery: '',
+  historySearchSource: 'all',
+  historySearchMode: 'all',
+  searchFlags: {
+    hasFiles: false,
+    failedOnly: false,
+    pinnedOnly: false,
+    contextExcludedOnly: false,
+  },
+};
+
+const readSidebarState = () => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SIDEBAR_STATE_STORAGE_KEY) || '{}');
+    return {
+      ...DEFAULT_SIDEBAR_STATE,
+      ...parsed,
+      searchFlags: {
+        ...DEFAULT_SIDEBAR_STATE.searchFlags,
+        ...(parsed.searchFlags || {}),
+      },
+    };
+  } catch {
+    return DEFAULT_SIDEBAR_STATE;
+  }
+};
+
+const writeSidebarState = (state) => {
+  try {
+    window.localStorage.setItem(SIDEBAR_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Local storage can be unavailable in private or restricted browser contexts.
+  }
+};
+
 const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
 const groupConversationDate = (value) => {
@@ -97,16 +138,19 @@ export default function Sidebar({
   maxWidth = 520,
   onResize,
 }) {
+  const [initialSidebarState] = useState(readSidebarState);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
   const [tagEditingId, setTagEditingId] = useState(null);
   const [tagInput, setTagInput] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
-  const [viewMode, setViewMode] = useState('active');
-  const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [tagFilter, setTagFilter] = useState('');
-  const [historySearchQuery, setHistorySearchQuery] = useState('');
-  const [historySearchSource, setHistorySearchSource] = useState('all');
+  const [viewMode, setViewMode] = useState(initialSidebarState.viewMode === 'archived' ? 'archived' : 'active');
+  const [favoriteOnly, setFavoriteOnly] = useState(Boolean(initialSidebarState.favoriteOnly));
+  const [tagFilter, setTagFilter] = useState(initialSidebarState.tagFilter || '');
+  const [historySearchQuery, setHistorySearchQuery] = useState(initialSidebarState.historySearchQuery || '');
+  const [historySearchSource, setHistorySearchSource] = useState(initialSidebarState.historySearchSource || 'all');
+  const [historySearchMode, setHistorySearchMode] = useState(initialSidebarState.historySearchMode || 'all');
+  const [searchFlags, setSearchFlags] = useState(initialSidebarState.searchFlags || DEFAULT_SIDEBAR_STATE.searchFlags);
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const [historySearchResults, setHistorySearchResults] = useState([]);
   const [historySearchLoading, setHistorySearchLoading] = useState(false);
@@ -143,14 +187,31 @@ export default function Sidebar({
 
   const filteredSearchResults = useMemo(() => (historySearchResults || []).filter((result) => {
     if (!visibleConversationIds.has(result.conversation_id)) return false;
-    if (historySearchSource === 'all') return true;
-    if (historySearchSource === 'message') return result.source === 'message';
-    if (historySearchSource === 'user') return result.role === 'user';
-    if (historySearchSource === 'assistant') return result.role === 'assistant';
-    return result.source === historySearchSource;
-  }), [historySearchResults, historySearchSource, visibleConversationIds]);
+    if (historySearchSource === 'message' && result.source !== 'message') return false;
+    if (historySearchSource === 'user' && result.role !== 'user') return false;
+    if (historySearchSource === 'assistant' && result.role !== 'assistant') return false;
+    if (!['all', 'message', 'user', 'assistant'].includes(historySearchSource) && result.source !== historySearchSource) return false;
+
+    if (historySearchMode !== 'all') {
+      const resultModes = Array.isArray(result.modes) ? result.modes : [];
+      if (result.mode !== historySearchMode && !resultModes.includes(historySearchMode)) return false;
+    }
+
+    if (searchFlags.hasFiles && !result.has_files) return false;
+    if (searchFlags.failedOnly && !(result.has_failed_run || ['failed', 'interrupted'].includes(result.status))) return false;
+    if (searchFlags.pinnedOnly && !(result.pinned || result.conversation_pinned)) return false;
+    if (searchFlags.contextExcludedOnly && !result.context_excluded) return false;
+    return true;
+  }), [historySearchResults, historySearchMode, historySearchSource, searchFlags, visibleConversationIds]);
 
   const activeSearchResult = filteredSearchResults[Math.max(0, Math.min(activeSearchResultIndex, filteredSearchResults.length - 1))] || null;
+  const activeExtraFilterCount = [
+    historySearchMode !== 'all',
+    searchFlags.hasFiles,
+    searchFlags.failedOnly,
+    searchFlags.pinnedOnly,
+    searchFlags.contextExcludedOnly,
+  ].filter(Boolean).length;
 
   const activeGroupLabel = useMemo(() => {
     const activeGroup = conversationGroups.find((group) =>
@@ -195,7 +256,19 @@ export default function Sidebar({
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
-  }, [historySearchQuery, historySearchSource, filteredSearchResults.length]);
+  }, [historySearchMode, historySearchQuery, historySearchSource, filteredSearchResults.length, searchFlags]);
+
+  useEffect(() => {
+    writeSidebarState({
+      viewMode,
+      favoriteOnly,
+      tagFilter,
+      historySearchQuery,
+      historySearchSource,
+      historySearchMode,
+      searchFlags,
+    });
+  }, [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, searchFlags, tagFilter, viewMode]);
 
   const handleStartEdit = (conv) => {
     setEditingId(conv.id);
@@ -246,6 +319,19 @@ export default function Sidebar({
 
   const handleDeleteConversation = (conversationId) => {
     onDeleteConversation(conversationId);
+  };
+
+  const toggleSearchFlag = (flagName) => {
+    setSearchFlags((current) => ({
+      ...current,
+      [flagName]: !current[flagName],
+    }));
+  };
+
+  const clearSearchFilters = () => {
+    setHistorySearchSource('all');
+    setHistorySearchMode('all');
+    setSearchFlags(DEFAULT_SIDEBAR_STATE.searchFlags);
   };
 
   const handleMetadataClick = async (event, conv, updates) => {
@@ -404,19 +490,40 @@ export default function Sidebar({
           )}
         </div>
         {historySearchQuery.trim() && (
-          <select
-            className="sidebar-search-filter"
-            value={historySearchSource}
-            onChange={(event) => setHistorySearchSource(event.target.value)}
-            aria-label="Filter search result source"
-          >
-            <option value="all">All sources</option>
-            <option value="title">Titles</option>
-            <option value="message">Messages</option>
-            <option value="user">User messages</option>
-            <option value="assistant">Assistant answers</option>
-            <option value="memory">Memory</option>
-          </select>
+          <div className="sidebar-search-controls">
+            <select
+              className="sidebar-search-filter"
+              value={historySearchSource}
+              onChange={(event) => setHistorySearchSource(event.target.value)}
+              aria-label="Filter search result source"
+            >
+              <option value="all">All sources</option>
+              <option value="title">Titles</option>
+              <option value="message">Messages</option>
+              <option value="user">User messages</option>
+              <option value="assistant">Assistant answers</option>
+              <option value="memory">Memory</option>
+            </select>
+            <select
+              className="sidebar-search-filter"
+              value={historySearchMode}
+              onChange={(event) => setHistorySearchMode(event.target.value)}
+              aria-label="Filter search result mode"
+            >
+              <option value="all">All modes</option>
+              <option value="quick">Quick</option>
+              <option value="council">Council</option>
+            </select>
+            <div className="sidebar-search-options" aria-label="Search result flags">
+              <button type="button" className={searchFlags.hasFiles ? 'active' : ''} onClick={() => toggleSearchFlag('hasFiles')}>Files</button>
+              <button type="button" className={searchFlags.failedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('failedOnly')}>Failed</button>
+              <button type="button" className={searchFlags.pinnedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('pinnedOnly')}>Pinned</button>
+              <button type="button" className={searchFlags.contextExcludedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('contextExcludedOnly')}>Excluded</button>
+              {activeExtraFilterCount > 0 && (
+                <button type="button" className="clear" onClick={clearSearchFilters}>Clear filters</button>
+              )}
+            </div>
+          </div>
         )}
       </div>
 

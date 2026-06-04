@@ -21,6 +21,8 @@
 - 错误恢复：失败/中断消息已加入 ErrorActionPanel，按错误类型提供 Retry、Continue、LLM Settings、Context Policy、Diagnostics 等操作入口。
 - 富内容第一阶段：代码块支持语法高亮、行号、长代码折叠；表格已有 Markdown/CSV 复制；Mermaid/KaTeX/代码高亮已做缓存与视口懒渲染。
 - 长回答折叠修复：最终答案只保留 `Stage3` 一层折叠控制，避免 `show full answer` 后仍被外层 `max-height` 截断。
+- 搜索增强第二轮：搜索 API 返回 mode、tags、favorite、文件、失败、pinned、context excluded 等过滤元数据；Sidebar 和当前会话搜索条件已持久化到 localStorage。
+- 性能增强第二轮：`RichMarkdown` 增加 compact 内容缓存、Markdown/公式分段缓存，并在进入视口后通过 idle callback 切换完整渲染。
 
 ### 0.2 已验证
 
@@ -36,18 +38,18 @@
 
 ### 0.3 当前仍未完成
 
-- 搜索增强：基础搜索和跳转已完成，仍需补更多过滤器、结果分组、搜索状态持久化、批量结果导航和组件级测试。
+- 搜索增强：基础搜索、跳转、命中高亮、状态持久化和常用过滤器已完成，仍需补结果分组、批量结果导航、更多审计类过滤器和组件级测试。
 - Retry with edit：后端和前端已有基础能力，但仍需要更完整的输入区编辑态、文件/图片编辑规则和重试前预览。
 - Council 深化：已有 summary 和 model status，仍需补模型贡献解释、成本估算、部分失败归因和更清晰的成功/失败影响说明。
 - 诊断产品化：已有 ErrorActionPanel，仍需补 provider 网络诊断、Context Policy 问题检测、API key/限流/禁用模型的更明确修复路径。
 - 长消息体验：已有最终答案折叠和代码行号/折叠，仍缺 Markdown heading outline、表格排序/下载、Mermaid 放大/下载、公式源码复制。
-- 长会话性能：已有 RichMarkdown 视口懒渲染，仍缺消息列表虚拟滚动、Markdown AST 缓存、Mermaid/KaTeX idle 调度和缓存失效策略。
+- 长会话性能：已有 RichMarkdown 视口懒渲染、Markdown 分段缓存和 idle 完整渲染，仍缺消息列表虚拟滚动、真实 Markdown AST 缓存、Mermaid/KaTeX 更细粒度缓存失效策略。
 
 ### 0.4 下一轮建议优先级
 
 1. 工作区收敛：按功能拆分提交当前已完成改动，并保留验证证据。
-2. 搜索增强：补更多过滤器、结果分组、搜索状态持久化和组件级测试。
-3. 长会话性能：引入消息虚拟滚动试点，补 Markdown AST 缓存和重组件 idle 渲染。
+2. 搜索增强：已补更多过滤器和搜索状态持久化；下一步补结果分组、批量导航和组件级测试。
+3. 长会话性能：已补 Markdown 分段缓存和 idle 完整渲染；下一步引入消息虚拟滚动试点和真实 Markdown AST 缓存。
 4. Council 深化：补模型贡献解释、成本/耗时统计、部分失败归因和更完整的 run 诊断。
 5. 富内容高级操作：表格排序/下载、Mermaid 放大/下载、公式源码复制、diff 专用样式。
 

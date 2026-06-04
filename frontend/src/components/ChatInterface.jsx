@@ -25,6 +25,7 @@ const contentToText = (content) => {
 };
 
 const DRAFT_STORAGE_PREFIX = 'llm-council:draft:';
+const SEARCH_STORAGE_PREFIX = 'llm-council:conversation-search:';
 const LONG_USER_MESSAGE_CHARS = 2200;
 const LONG_USER_MESSAGE_LINES = 44;
 const SEARCH_SCOPE_OPTIONS = [
@@ -34,6 +35,33 @@ const SEARCH_SCOPE_OPTIONS = [
   { value: 'council', label: 'Council' },
   { value: 'files', label: 'Files' },
 ];
+
+
+const readConversationSearchState = (conversationId) => {
+  if (!conversationId) return { query: '', scope: 'all' };
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`${SEARCH_STORAGE_PREFIX}${conversationId}`) || '{}');
+    return {
+      query: typeof parsed.query === 'string' ? parsed.query : '',
+      scope: SEARCH_SCOPE_OPTIONS.some((option) => option.value === parsed.scope) ? parsed.scope : 'all',
+    };
+  } catch {
+    return { query: '', scope: 'all' };
+  }
+};
+
+const writeConversationSearchState = (conversationId, state) => {
+  if (!conversationId) return;
+  try {
+    if (!state.query && state.scope === 'all') {
+      window.localStorage.removeItem(`${SEARCH_STORAGE_PREFIX}${conversationId}`);
+      return;
+    }
+    window.localStorage.setItem(`${SEARCH_STORAGE_PREFIX}${conversationId}`, JSON.stringify(state));
+  } catch {
+    // Local storage can be unavailable in private or restricted browser contexts.
+  }
+};
 
 const isLongText = (text, maxChars, maxLines) => (
   text.length > maxChars || text.split('\n').length > maxLines
@@ -1098,10 +1126,19 @@ export default function ChatInterface({
     turnAnchorsRef.current.clear();
     messageAnchorsRef.current.clear();
     setHighlightedMessageIndex(null);
-    setMessageSearchQuery('');
+    const savedSearchState = readConversationSearchState(conversation?.id);
+    setMessageSearchQuery(savedSearchState.query);
+    setMessageSearchScope(savedSearchState.scope);
     setActiveSearchResultIndex(0);
     setEditTarget(null);
   }, [conversation?.id]);
+
+  useEffect(() => {
+    writeConversationSearchState(conversation?.id, {
+      query: messageSearchQuery,
+      scope: messageSearchScope,
+    });
+  }, [conversation?.id, messageSearchQuery, messageSearchScope]);
 
   const registerTurnAnchor = useCallback((messageIndex, node) => {
     if (node) {

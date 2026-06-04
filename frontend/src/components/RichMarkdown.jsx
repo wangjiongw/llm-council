@@ -50,6 +50,8 @@ let mermaidRenderCounter = 0;
 const highlightCache = new Map();
 const katexCache = new Map();
 const mermaidCache = new Map();
+const compactContentCache = new Map();
+const markdownSegmentsCache = new Map();
 
 function remember(cache, key, value, maxEntries = 80) {
   if (cache.has(key)) cache.delete(key);
@@ -534,18 +536,29 @@ function ImageRenderer(props) {
 }
 
 function compactContent(content) {
-  const text = String(content || '')
+  const source = String(content || '');
+  const cacheKey = `${source.length}:${stableHash(source)}`;
+  const cached = compactContentCache.get(cacheKey);
+  if (cached) return cached;
+
+  const text = source
     .replace(/```[\s\S]*?```/g, '[code block]')
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '[image]')
     .replace(/\$\$[\s\S]*?\$\$/g, '[formula]')
     .replace(/\|(.+)\|/g, '[table]')
     .replace(/\s+/g, ' ')
     .trim();
-  return text.length > 420 ? `${text.slice(0, 420)}...` : text;
+  const compact = text.length > 420 ? `${text.slice(0, 420)}...` : text;
+  remember(compactContentCache, cacheKey, compact, 160);
+  return compact;
 }
 
 function splitBlockMath(content) {
   const source = String(content || '');
+  const cacheKey = `${source.length}:${stableHash(source)}`;
+  const cached = markdownSegmentsCache.get(cacheKey);
+  if (cached) return cached;
+
   const segments = [];
   let cursor = 0;
   const pattern = /\$\$([\s\S]+?)\$\$/g;
@@ -563,11 +576,14 @@ function splitBlockMath(content) {
     segments.push({ type: 'markdown', value: source.slice(cursor) });
   }
 
-  return segments.length ? segments : [{ type: 'markdown', value: source }];
+  const result = segments.length ? segments : [{ type: 'markdown', value: source }];
+  remember(markdownSegmentsCache, cacheKey, result, 160);
+  return result;
 }
 
 function useDeferredFullMode(requestedMode) {
   const rootRef = useRef(null);
+  const idleHandleRef = useRef(null);
   const [hasEnteredViewport, setHasEnteredViewport] = useState(
     () => typeof IntersectionObserver === 'undefined'
   );
@@ -582,17 +598,48 @@ function useDeferredFullMode(requestedMode) {
       return undefined;
     }
 
+    const cancelIdle = () => {
+      const handle = idleHandleRef.current;
+      if (!handle) return;
+      if (handle.type === 'idle') {
+        window.cancelIdleCallback?.(handle.id);
+      } else {
+        window.clearTimeout(handle.id);
+      }
+      idleHandleRef.current = null;
+    };
+
+    const promoteToFull = () => {
+      if (idleHandleRef.current) return;
+      if (typeof window.requestIdleCallback === 'function') {
+        const id = window.requestIdleCallback(() => {
+          idleHandleRef.current = null;
+          setHasEnteredViewport(true);
+        }, { timeout: 900 });
+        idleHandleRef.current = { type: 'idle', id };
+      } else {
+        const id = window.setTimeout(() => {
+          idleHandleRef.current = null;
+          setHasEnteredViewport(true);
+        }, 80);
+        idleHandleRef.current = { type: 'timeout', id };
+      }
+    };
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setHasEnteredViewport(true);
+          promoteToFull();
           observer.disconnect();
         }
       },
       { rootMargin: '640px 0px' }
     );
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelIdle();
+    };
   }, [hasEnteredViewport, requestedMode]);
 
   const effectiveMode = requestedMode === 'full' && !hasEnteredViewport ? 'compact' : requestedMode;

@@ -30,7 +30,7 @@
 - `frontend/src/components/ChatInterface.jsx` / `ChatInterface.css`：扩展会话内搜索范围、接收外部 message jump、Quick/Council Summary、ErrorActionPanel 技术细节折叠、长 assistant 回答折叠。
 - `frontend/src/components/RichMarkdown.jsx` / `RichMarkdown.css`：新增代码行号、长代码折叠/展开，Copy code 保持复制原始代码。
 
-补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。剩余后续增强仍按本文各节的“后续增强/非目标”推进，例如更多搜索过滤器、搜索状态持久化、表格排序/下载、Mermaid 下载、diff 专用样式、虚拟滚动和组件级测试。
+补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。剩余后续增强仍按本文各节的“后续增强/非目标”推进，例如搜索结果分组、消息虚拟滚动、表格排序/下载、Mermaid 下载、diff 专用样式和组件级测试。
 
 ## 1. 会话内全文搜索和跳转
 
@@ -122,10 +122,14 @@
 
 ### 后续增强
 
-- 命中词高亮。
-- mode 过滤：quick / council。
-- has file / has pinned / has failed run 过滤。
-- 搜索结果分组和键盘导航。
+当前第二轮已完成：命中词高亮、mode 过滤、has file / pinned / failed / context excluded 过滤、键盘导航、搜索条件持久化。
+
+剩余后续增强：
+
+- 搜索结果按会话分组。
+- has provider audit / has memory / has image 等更细筛选。
+- 搜索状态导出或保存为快捷视图。
+- 组件级测试。
 
 ### 非目标
 
@@ -143,7 +147,7 @@
 
 ### 测试建议
 
-- 后端沿用现有 search API 测试。
+- 后端沿用并扩展 search API 测试，目前已覆盖搜索结果 metadata：mode、tags、favorite、conversation_pinned、has_files。
 - 前端 smoke：搜索标题、用户消息、assistant 回答、memory。
 - 构造 archived/favorite/tag 会话，检查筛选与搜索结果组合行为。
 

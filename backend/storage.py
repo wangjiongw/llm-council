@@ -363,6 +363,25 @@ def search_conversations(query: str, *, limit: int = 20) -> List[Dict[str, Any]]
 
         title = conversation.get("title", "New Conversation")
         created_at = conversation.get("created_at")
+        conversation_modes = sorted({
+            str((message.get("metadata") or {}).get("mode") or "")
+            for message in messages
+            if isinstance(message, dict) and (message.get("metadata") or {}).get("mode")
+        })
+        conversation_search_metadata = {
+            "updated_at": conversation.get("updated_at") or created_at,
+            "favorite": bool(conversation.get("favorite")),
+            "archived": bool(conversation.get("archived")),
+            "conversation_pinned": bool(conversation.get("pinned")),
+            "tags": _normalize_conversation_tags(conversation.get("tags")),
+            "modes": conversation_modes,
+            "has_files": any(bool(message.get("files")) for message in messages if isinstance(message, dict)),
+            "has_failed_run": any(
+                message.get("status") in {"failed", "interrupted"} or (message.get("stage3") or {}).get("status") in {"failed", "interrupted"}
+                for message in messages
+                if isinstance(message, dict)
+            ),
+        }
         title_score = _search_score(title, terms)
         if title_score:
             results.append({
@@ -376,6 +395,7 @@ def search_conversations(query: str, *, limit: int = 20) -> List[Dict[str, Any]]
                 "content": title,
                 "excerpt": _search_excerpt(title, terms),
                 "score": title_score + 3,
+                **conversation_search_metadata,
             })
 
         for memory in _normalize_context_memory(conversation.get("context_memory")):
@@ -395,6 +415,7 @@ def search_conversations(query: str, *, limit: int = 20) -> List[Dict[str, Any]]
                 "excerpt": _search_excerpt(content, terms),
                 "score": score + 2,
                 "enabled": bool(memory.get("enabled")),
+                **conversation_search_metadata,
             })
 
         for index, message in enumerate(messages):
@@ -409,6 +430,8 @@ def search_conversations(query: str, *, limit: int = 20) -> List[Dict[str, Any]]
             score = _search_score(searchable, terms)
             if not score:
                 continue
+            metadata = message.get("metadata") or {}
+            stage3 = message.get("stage3") or {}
             results.append({
                 "conversation_id": conversation_id,
                 "conversation_title": title,
@@ -422,6 +445,10 @@ def search_conversations(query: str, *, limit: int = 20) -> List[Dict[str, Any]]
                 "score": score,
                 "context_excluded": bool(message.get("context_excluded")),
                 "pinned": bool(message.get("pinned")),
+                "mode": metadata.get("mode") or stage3.get("metadata", {}).get("mode"),
+                "status": message.get("status") or stage3.get("status"),
+                "has_files": bool(message.get("files")),
+                **conversation_search_metadata,
             })
 
     results.sort(key=lambda item: (item.get("score", 0), item.get("created_at") or ""), reverse=True)
