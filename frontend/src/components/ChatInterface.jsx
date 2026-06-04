@@ -28,6 +28,9 @@ const DRAFT_STORAGE_PREFIX = 'llm-council:draft:';
 const SEARCH_STORAGE_PREFIX = 'llm-council:conversation-search:';
 const LONG_USER_MESSAGE_CHARS = 2200;
 const LONG_USER_MESSAGE_LINES = 44;
+const VIRTUAL_MESSAGE_THRESHOLD = 80;
+const ESTIMATED_MESSAGE_HEIGHT = 260;
+const VIRTUAL_OVERSCAN_PX = 900;
 const SEARCH_SCOPE_OPTIONS = [
   { value: 'all', label: 'All' },
   { value: 'user', label: 'User' },
@@ -909,8 +912,13 @@ export default function ChatInterface({
   const [messageSearchScope, setMessageSearchScope] = useState('all');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const [editTarget, setEditTarget] = useState(null);
+  const [scrollMetrics, setScrollMetrics] = useState({ top: 0, height: 0 });
+  const [measuredMessageHeights, setMeasuredMessageHeights] = useState(() => new Map());
+  const resizeObserversRef = useRef(new Map());
 
   const draftStorageKey = conversation?.id ? `${DRAFT_STORAGE_PREFIX}${conversation.id}` : null;
+  const conversationMessages = useMemo(() => conversation?.messages || [], [conversation?.messages]);
+  const shouldVirtualizeMessages = conversationMessages.length > VIRTUAL_MESSAGE_THRESHOLD;
 
   const clearSavedDraft = useCallback(() => {
     if (!draftStorageKey) return;
@@ -1156,17 +1164,75 @@ export default function ChatInterface({
     }
   }, []);
 
+  const estimateMessageOffset = useCallback((messageIndex) => {
+    let offset = 0;
+    for (let index = 0; index < messageIndex; index += 1) {
+      offset += measuredMessageHeights.get(index) || ESTIMATED_MESSAGE_HEIGHT;
+    }
+    return offset;
+  }, [measuredMessageHeights]);
+
+  const registerMeasuredMessageAnchor = useCallback((messageIndex, node) => {
+    registerMessageAnchor(messageIndex, node);
+
+    const existing = resizeObserversRef.current.get(messageIndex);
+    if (existing) {
+      existing.disconnect();
+      resizeObserversRef.current.delete(messageIndex);
+    }
+
+    if (!node) return;
+
+    const updateHeight = () => {
+      const nextHeight = Math.max(1, Math.ceil(node.getBoundingClientRect().height || node.offsetHeight || ESTIMATED_MESSAGE_HEIGHT));
+      setMeasuredMessageHeights((current) => {
+        if (current.get(messageIndex) === nextHeight) return current;
+        const next = new Map(current);
+        next.set(messageIndex, nextHeight);
+        return next;
+      });
+    };
+
+    updateHeight();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateHeight);
+      observer.observe(node);
+      resizeObserversRef.current.set(messageIndex, observer);
+    }
+  }, [registerMessageAnchor]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const observers = resizeObserversRef.current;
+    window.queueMicrotask(() => {
+      if (!cancelled) setMeasuredMessageHeights(new Map());
+    });
+    return () => {
+      cancelled = true;
+      observers.forEach((observer) => observer.disconnect());
+      observers.clear();
+    };
+  }, [conversation?.id]);
+
   const scrollToMessage = useCallback((messageIndex) => {
     const anchor = messageAnchorsRef.current.get(messageIndex);
-    if (!anchor) return false;
+    if (anchor) {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (shouldVirtualizeMessages && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({ top: estimateMessageOffset(messageIndex), behavior: 'smooth' });
+      window.requestAnimationFrame(() => {
+        messageAnchorsRef.current.get(messageIndex)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } else {
+      return false;
+    }
 
-    anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setHighlightedMessageIndex(messageIndex);
     window.setTimeout(() => {
       setHighlightedMessageIndex(current => (current === messageIndex ? null : current));
     }, 1600);
     return true;
-  }, []);
+  }, [estimateMessageOffset, shouldVirtualizeMessages]);
 
   const jumpToSearchResult = useCallback((nextIndex) => {
     if (messageSearchResults.length === 0) return;
@@ -1186,9 +1252,16 @@ export default function ChatInterface({
     if (!entry) return;
 
     const anchor = turnAnchorsRef.current.get(entry.messageIndex);
-    anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (anchor) {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (shouldVirtualizeMessages && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({ top: estimateMessageOffset(entry.messageIndex), behavior: 'smooth' });
+      window.requestAnimationFrame(() => {
+        turnAnchorsRef.current.get(entry.messageIndex)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
     setCurrentTurnIndex(boundedIndex);
-  }, [turnEntries]);
+  }, [estimateMessageOffset, shouldVirtualizeMessages, turnEntries]);
 
   const scrollMessagesToTop = useCallback(() => {
     messagesContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1211,10 +1284,26 @@ export default function ChatInterface({
   }, [activeSearchResult, messageSearchQuery, scrollToMessage]);
 
   useEffect(() => {
-    if (!messageJumpTarget || messageJumpTarget.conversationId !== conversation?.id) return;
+    if (!messageJumpTarget || messageJumpTarget.conversationId !== conversation?.id) return undefined;
+
+    if (messageJumpTarget.searchQuery) {
+      setMessageSearchQuery(messageJumpTarget.searchQuery);
+      if (SEARCH_SCOPE_OPTIONS.some((option) => option.value === messageJumpTarget.searchScope)) {
+        setMessageSearchScope(messageJumpTarget.searchScope);
+      }
+    }
+
+    if (messageJumpTarget.scrollTarget === 'context') {
+      const frame = window.requestAnimationFrame(() => {
+        scrollToContextPanel();
+        onMessageJumpHandled?.();
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+
     if (!Number.isInteger(messageJumpTarget.messageIndex)) {
       onMessageJumpHandled?.();
-      return;
+      return undefined;
     }
 
     const frame = window.requestAnimationFrame(() => {
@@ -1223,11 +1312,18 @@ export default function ChatInterface({
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [conversation?.id, conversation?.messages?.length, messageJumpTarget, onMessageJumpHandled, scrollToMessage]);
+  }, [conversation?.id, conversation?.messages?.length, messageJumpTarget, onMessageJumpHandled, scrollToContextPanel, scrollToMessage]);
 
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || turnEntries.length === 0) return;
+    if (!container) return;
+
+    setScrollMetrics((current) => {
+      const next = { top: container.scrollTop, height: container.clientHeight };
+      return current.top === next.top && current.height === next.height ? current : next;
+    });
+
+    if (turnEntries.length === 0) return;
 
     const containerTop = container.getBoundingClientRect().top;
     let activeIndex = 0;
@@ -1241,6 +1337,24 @@ export default function ChatInterface({
 
     setCurrentTurnIndex(prev => (prev === activeIndex ? prev : activeIndex));
   }, [turnEntries]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return undefined;
+
+    const updateMetrics = () => {
+      setScrollMetrics((current) => {
+        const next = { top: container.scrollTop, height: container.clientHeight };
+        return current.top === next.top && current.height === next.height ? current : next;
+      });
+    };
+
+    updateMetrics();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(updateMetrics);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [conversation?.id]);
 
   const adjustInputHeight = useCallback(() => {
     const textarea = inputRef.current;
@@ -1270,6 +1384,52 @@ export default function ChatInterface({
   }, [draftToRestore, onDraftRestored]);
 
   // File handling functions
+  const virtualMessageWindow = useMemo(() => {
+    const count = conversationMessages.length;
+    if (!shouldVirtualizeMessages) {
+      return {
+        topSpacer: 0,
+        bottomSpacer: 0,
+        items: conversationMessages.map((msg, index) => ({ msg, index })),
+      };
+    }
+
+    const viewportTop = Math.max(0, scrollMetrics.top - VIRTUAL_OVERSCAN_PX);
+    const viewportBottom = scrollMetrics.top + (scrollMetrics.height || 720) + VIRTUAL_OVERSCAN_PX;
+    const heights = conversationMessages.map((_, index) => measuredMessageHeights.get(index) || ESTIMATED_MESSAGE_HEIGHT);
+
+    let offset = 0;
+    let startIndex = 0;
+    while (startIndex < count && offset + heights[startIndex] < viewportTop) {
+      offset += heights[startIndex];
+      startIndex += 1;
+    }
+
+    let endIndex = startIndex;
+    let visibleBottom = offset;
+    while (endIndex < count && visibleBottom < viewportBottom) {
+      visibleBottom += heights[endIndex];
+      endIndex += 1;
+    }
+
+    if (isLoading && count > 0) {
+      const totalHeight = heights.reduce((total, height) => total + height, 0);
+      const nearBottom = scrollMetrics.top + (scrollMetrics.height || 0) >= totalHeight - (scrollMetrics.height || 720) - 320;
+      if (nearBottom) {
+        endIndex = Math.max(endIndex, count);
+        startIndex = Math.min(startIndex, Math.max(0, count - 12));
+      }
+    }
+
+    const topSpacer = heights.slice(0, startIndex).reduce((total, height) => total + height, 0);
+    const bottomSpacer = heights.slice(endIndex).reduce((total, height) => total + height, 0);
+    return {
+      topSpacer,
+      bottomSpacer,
+      items: conversationMessages.slice(startIndex, endIndex).map((msg, index) => ({ msg, index: startIndex + index })),
+    };
+  }, [conversationMessages, isLoading, measuredMessageHeights, scrollMetrics, shouldVirtualizeMessages]);
+
   const handleFileUploadLocal = useCallback(async (newFiles) => {
     await onFileUpload(newFiles);
   }, [onFileUpload]);
@@ -1537,8 +1697,11 @@ export default function ChatInterface({
             )}
 
             {/* Display all messages with turn indicators */}
-            <div className="messages-history">
-              {conversation.messages.map((msg, index) => (
+            <div className={`messages-history ${shouldVirtualizeMessages ? 'virtualized' : ''}`}>
+              {shouldVirtualizeMessages && virtualMessageWindow.topSpacer > 0 && (
+                <div className="message-virtual-spacer" style={{ height: `${virtualMessageWindow.topSpacer}px` }} aria-hidden="true" />
+              )}
+              {virtualMessageWindow.items.map(({ msg, index }) => (
                 <MessageItem
                   key={index}
                   msg={msg}
@@ -1558,11 +1721,14 @@ export default function ChatInterface({
                   isLastMessage={index === conversation.messages.length - 1}
                   messageIndex={index}
                   turnAnchorRef={msg.role === 'user' ? (node) => registerTurnAnchor(index, node) : undefined}
-                  messageAnchorRef={(node) => registerMessageAnchor(index, node)}
+                  messageAnchorRef={(node) => registerMeasuredMessageAnchor(index, node)}
                   turnAudit={msg.role === 'assistant' ? turnAuditByAssistantIndex.get(index) : null}
                   isHighlighted={highlightedMessageIndex === index}
                 />
               ))}
+              {shouldVirtualizeMessages && virtualMessageWindow.bottomSpacer > 0 && (
+                <div className="message-virtual-spacer" style={{ height: `${virtualMessageWindow.bottomSpacer}px` }} aria-hidden="true" />
+              )}
             </div>
           </>
         )}

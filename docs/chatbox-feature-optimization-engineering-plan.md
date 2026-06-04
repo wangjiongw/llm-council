@@ -22,7 +22,11 @@
 - 富内容第一阶段：代码块支持语法高亮、行号、长代码折叠；表格已有 Markdown/CSV 复制；Mermaid/KaTeX/代码高亮已做缓存与视口懒渲染。
 - 长回答折叠修复：最终答案只保留 `Stage3` 一层折叠控制，避免 `show full answer` 后仍被外层 `max-height` 截断。
 - 搜索增强第二轮：搜索 API 返回 mode、tags、favorite、文件、失败、pinned、context excluded 等过滤元数据；Sidebar 和当前会话搜索条件已持久化到 localStorage。
+- 搜索增强第三轮：Sidebar 搜索结果已按 conversation 分组，组内命中可展开；打开 message 命中会把 query 注入会话内搜索，memory 命中会滚动到 Context 区。
 - 性能增强第二轮：`RichMarkdown` 增加 compact 内容缓存、Markdown/公式分段缓存，并在进入视口后通过 idle callback 切换完整渲染。
+- 性能增强第三轮：长会话消息列表已加入轻量虚拟滚动试点，保留搜索跳转、turn 跳转和流式底部滚动兼容逻辑。
+- 富内容第三轮：表格已支持搜索、排序、sticky header、CSV 下载；代码块已支持下载和 diff 专用样式；Mermaid 已支持 Preview、Copy SVG、Download SVG/PNG。
+- 前端测试第三轮：已引入 Vitest + Testing Library + jsdom，覆盖 Sidebar 搜索分组/跳转和 RichMarkdown 表格/代码/Mermaid 基础交互。
 
 ### 0.2 已验证
 
@@ -38,12 +42,12 @@
 
 ### 0.3 当前仍未完成
 
-- 搜索增强：基础搜索、跳转、命中高亮、状态持久化和常用过滤器已完成，仍需补结果分组、批量结果导航、更多审计类过滤器和组件级测试。
+- 搜索增强：基础搜索、跳转、命中高亮、状态持久化、常用过滤器、结果分组和组件测试已完成，仍可补更多审计类过滤器、保存搜索视图和更完整的批量结果导航。
 - Retry with edit：后端和前端已有基础能力，但仍需要更完整的输入区编辑态、文件/图片编辑规则和重试前预览。
 - Council 深化：已有 summary 和 model status，仍需补模型贡献解释、成本估算、部分失败归因和更清晰的成功/失败影响说明。
 - 诊断产品化：已有 ErrorActionPanel，仍需补 provider 网络诊断、Context Policy 问题检测、API key/限流/禁用模型的更明确修复路径。
-- 长消息体验：已有最终答案折叠和代码行号/折叠，仍缺 Markdown heading outline、表格排序/下载、Mermaid 放大/下载、公式源码复制。
-- 长会话性能：已有 RichMarkdown 视口懒渲染、Markdown 分段缓存和 idle 完整渲染，仍缺消息列表虚拟滚动、真实 Markdown AST 缓存、Mermaid/KaTeX 更细粒度缓存失效策略。
+- 长消息体验：已有最终答案折叠、代码行号/折叠、表格搜索/排序/下载、Mermaid 放大/下载和公式源码复制；仍可补 Markdown heading outline、块级折叠和 XLSX 导出。
+- 长会话性能：已有 RichMarkdown 视口懒渲染、Markdown 分段缓存、idle 完整渲染和消息列表虚拟滚动试点，仍缺真实 Markdown AST 缓存、虚拟滚动视觉 smoke 和 Mermaid/KaTeX 更细粒度缓存失效策略。
 
 ### 0.4 下一轮建议优先级
 
@@ -612,7 +616,7 @@
 
 ### 3.16 前端性能：虚拟滚动、缓存和懒渲染
 
-当前实现状态：已实现视口懒渲染基础版，虚拟滚动和 Markdown AST 缓存未实现。
+当前实现状态：已实现视口懒渲染基础版和消息列表虚拟滚动试点，Markdown AST 缓存未实现。
 
 已有能力：
 
@@ -624,7 +628,7 @@
 
 当前缺口：
 
-- 消息列表没有虚拟滚动。
+- 消息列表已有轻量虚拟滚动试点，超过阈值时按 message group 窗口化渲染。
 - Mermaid/KaTeX/代码高亮已通过 `RichMarkdown` 的视口懒渲染延后完整渲染；但 MermaidBlock/MathBlock 还没有更细粒度的块级缓存和 idle 调度。
 - Markdown AST 没有缓存。
 - 长消息中多个重组件同时渲染时仍可能卡顿。
@@ -757,7 +761,7 @@
 
 ### Phase 2：长内容和输入可靠性
 
-进度：会话组织基础版和 RichMarkdown 视口懒渲染已提前完成；草稿自动保存、长消息折叠、代码行号、表格下载等仍待实现。
+进度：会话组织基础版、RichMarkdown 视口懒渲染、草稿自动保存、长消息折叠、代码行号、表格下载/搜索/排序、Mermaid 下载/预览和组件测试已完成。
 
 目标：
 
@@ -799,7 +803,7 @@
 
 ### Phase 4：富内容高级操作和性能
 
-进度：已完成 RichMarkdown 视口懒渲染基础版；其余高级富内容操作和虚拟滚动仍待实现。
+进度：已完成 RichMarkdown 视口懒渲染基础版、高级富内容操作基础版和长会话虚拟滚动试点。
 
 目标：
 

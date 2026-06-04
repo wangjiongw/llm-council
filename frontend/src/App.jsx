@@ -126,6 +126,15 @@ function App() {
       setPendingMessageJump({
         conversationId,
         messageIndex: result.message_index,
+        searchQuery: result.query || '',
+        searchScope: result.role === 'user' ? 'user' : result.role === 'assistant' ? 'assistant' : 'all',
+        nonce: Date.now(),
+      });
+    } else if (result.source === 'memory') {
+      setPendingMessageJump({
+        conversationId,
+        scrollTarget: 'context',
+        searchQuery: result.query || '',
         nonce: Date.now(),
       });
     } else {

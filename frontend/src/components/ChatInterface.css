@@ -187,6 +187,17 @@
   gap: 16px;
 }
 
+.messages-history.virtualized {
+  contain: layout style;
+}
+
+.message-virtual-spacer {
+  flex: 0 0 auto;
+  width: 100%;
+  pointer-events: none;
+}
+
+
 .input-section {
   padding: 16px 24px 24px;
   background: var(--surface-soft);

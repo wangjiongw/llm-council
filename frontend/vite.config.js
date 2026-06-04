@@ -8,6 +8,11 @@ const backendTarget = process.env.VITE_API_PROXY_TARGET || `http://${backendHost
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    globals: true,
+  },
   build: {
     chunkSizeWarningLimit: 700,
   },

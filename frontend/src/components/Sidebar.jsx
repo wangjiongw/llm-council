@@ -120,6 +120,60 @@ const searchSourceLabel = (result) => {
   return result.source || 'Result';
 };
 
+
+const searchResultTurnNumber = (result) => {
+  if (Number.isInteger(result.turn_number)) return result.turn_number;
+  if (Number.isInteger(result.message_index)) return Math.floor(result.message_index / 2) + 1;
+  return null;
+};
+
+const searchResultKey = (result, index) => `${result.conversation_id}-${result.source}-${result.message_index ?? result.memory_id ?? 'meta'}-${index}`;
+
+const formatSearchDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
+const searchBadgesFor = (result) => [
+  result.conversation_pinned ? 'Pinned' : '',
+  result.favorite ? 'Favorite' : '',
+  result.has_files ? 'Files' : '',
+  result.has_failed_run || ['failed', 'interrupted'].includes(result.status) ? 'Failed' : '',
+  result.context_excluded ? 'Excluded' : '',
+  Array.isArray(result.modes) && result.modes.length ? result.modes.join('/') : result.mode || '',
+].filter(Boolean);
+
+const groupSearchResults = (results) => {
+  const groups = [];
+  const byConversation = new Map();
+
+  results.forEach((result, flatIndex) => {
+    const conversationId = result.conversation_id || 'unknown';
+    if (!byConversation.has(conversationId)) {
+      const group = {
+        conversationId,
+        title: result.conversation_title || 'New Conversation',
+        updatedAt: result.updated_at || result.created_at || '',
+        results: [],
+        badges: new Set(),
+      };
+      byConversation.set(conversationId, group);
+      groups.push(group);
+    }
+
+    const group = byConversation.get(conversationId);
+    group.results.push({ ...result, flatIndex });
+    searchBadgesFor(result).forEach((badge) => group.badges.add(badge));
+  });
+
+  return groups.map((group) => ({
+    ...group,
+    badges: Array.from(group.badges).slice(0, 5),
+  }));
+};
+
 export default function Sidebar({
   conversations,
   currentConversationId,
@@ -152,6 +206,7 @@ export default function Sidebar({
   const [historySearchMode, setHistorySearchMode] = useState(initialSidebarState.historySearchMode || 'all');
   const [searchFlags, setSearchFlags] = useState(initialSidebarState.searchFlags || DEFAULT_SIDEBAR_STATE.searchFlags);
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
+  const [expandedSearchGroups, setExpandedSearchGroups] = useState(() => new Set());
   const [historySearchResults, setHistorySearchResults] = useState([]);
   const [historySearchLoading, setHistorySearchLoading] = useState(false);
   const [historySearchError, setHistorySearchError] = useState('');
@@ -204,6 +259,7 @@ export default function Sidebar({
     return true;
   }), [historySearchResults, historySearchMode, historySearchSource, searchFlags, visibleConversationIds]);
 
+  const groupedSearchResults = useMemo(() => groupSearchResults(filteredSearchResults), [filteredSearchResults]);
   const activeSearchResult = filteredSearchResults[Math.max(0, Math.min(activeSearchResultIndex, filteredSearchResults.length - 1))] || null;
   const activeExtraFilterCount = [
     historySearchMode !== 'all',
@@ -257,6 +313,10 @@ export default function Sidebar({
   useEffect(() => {
     setActiveSearchResultIndex(0);
   }, [historySearchMode, historySearchQuery, historySearchSource, filteredSearchResults.length, searchFlags]);
+
+  useEffect(() => {
+    setExpandedSearchGroups(new Set());
+  }, [historySearchQuery]);
 
   useEffect(() => {
     writeSidebarState({
@@ -341,11 +401,24 @@ export default function Sidebar({
 
   const openSearchResult = (result) => {
     if (!result) return;
+    const enrichedResult = { ...result, query: historySearchQuery.trim() };
     if (onSelectSearchResult) {
-      onSelectSearchResult(result);
+      onSelectSearchResult(enrichedResult);
     } else {
       onSelectConversation(result.conversation_id);
     }
+  };
+
+  const toggleSearchGroup = (conversationId) => {
+    setExpandedSearchGroups((current) => {
+      const next = new Set(current);
+      if (next.has(conversationId)) {
+        next.delete(conversationId);
+      } else {
+        next.add(conversationId);
+      }
+      return next;
+    });
   };
 
   const handleSearchKeyDown = (event) => {
@@ -538,25 +611,60 @@ export default function Sidebar({
             {!historySearchLoading && filteredSearchResults.length === 0 && (
               <div className="no-conversations">No matching results</div>
             )}
-            {filteredSearchResults.map((result, index) => (
-              <button
-                type="button"
-                className={`sidebar-search-result ${index === activeSearchResultIndex ? 'active' : ''}`}
-                key={`${result.conversation_id}-${result.source}-${result.message_index ?? 'meta'}-${index}`}
-                onMouseEnter={() => setActiveSearchResultIndex(index)}
-                onClick={() => openSearchResult(result)}
-              >
-                <span className="sidebar-search-result-title">
-                  <HighlightedText text={result.conversation_title || 'New Conversation'} query={historySearchQuery} />
-                </span>
-                <span className="sidebar-search-result-meta">
-                  {searchSourceLabel(result)}
-                </span>
-                <span className="sidebar-search-result-excerpt">
-                  <HighlightedText text={result.excerpt || result.content || 'Matched conversation'} query={historySearchQuery} />
-                </span>
-              </button>
-            ))}
+            {groupedSearchResults.map((group) => {
+              const activeInGroup = group.results.some((result) => result.flatIndex === activeSearchResultIndex);
+              const isExpanded = expandedSearchGroups.has(group.conversationId) || activeInGroup;
+              const visibleResults = isExpanded ? group.results : group.results.slice(0, 3);
+              const hiddenCount = Math.max(0, group.results.length - visibleResults.length);
+
+              return (
+                <section className="sidebar-search-group" key={group.conversationId}>
+                  <div className="sidebar-search-group-header">
+                    <div className="sidebar-search-group-title">
+                      <HighlightedText text={group.title} query={historySearchQuery} />
+                    </div>
+                    <div className="sidebar-search-group-meta">
+                      <span>{group.results.length} hit{group.results.length === 1 ? '' : 's'}</span>
+                      {group.updatedAt && <span>{formatSearchDate(group.updatedAt)}</span>}
+                    </div>
+                    {group.badges.length > 0 && (
+                      <div className="sidebar-search-group-badges">
+                        {group.badges.map((badge) => <span key={badge}>{badge}</span>)}
+                      </div>
+                    )}
+                  </div>
+                  {visibleResults.map((result) => {
+                    const turnNumber = searchResultTurnNumber(result);
+                    return (
+                      <button
+                        type="button"
+                        className={`sidebar-search-result ${result.flatIndex === activeSearchResultIndex ? 'active' : ''}`}
+                        key={searchResultKey(result, result.flatIndex)}
+                        onMouseEnter={() => setActiveSearchResultIndex(result.flatIndex)}
+                        onClick={() => openSearchResult(result)}
+                      >
+                        <span className="sidebar-search-result-meta">
+                          {searchSourceLabel(result)}{turnNumber ? ` · Turn ${turnNumber}` : ''}
+                        </span>
+                        <span className="sidebar-search-result-excerpt">
+                          <HighlightedText text={result.excerpt || result.content || 'Matched conversation'} query={historySearchQuery} />
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {hiddenCount > 0 && (
+                    <button type="button" className="sidebar-search-more" onClick={() => toggleSearchGroup(group.conversationId)}>
+                      Show {hiddenCount} more match{hiddenCount === 1 ? '' : 'es'}
+                    </button>
+                  )}
+                  {isExpanded && group.results.length > 3 && !activeInGroup && (
+                    <button type="button" className="sidebar-search-more" onClick={() => toggleSearchGroup(group.conversationId)}>
+                      Collapse matches
+                    </button>
+                  )}
+                </section>
+              );
+            })}
           </div>
         ) : visibleConversations.length === 0 ? (
           <div className="no-conversations">

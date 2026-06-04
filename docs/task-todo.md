@@ -30,7 +30,7 @@
 - `frontend/src/components/ChatInterface.jsx` / `ChatInterface.css`：扩展会话内搜索范围、接收外部 message jump、Quick/Council Summary、ErrorActionPanel 技术细节折叠、长 assistant 回答折叠。
 - `frontend/src/components/RichMarkdown.jsx` / `RichMarkdown.css`：新增代码行号、长代码折叠/展开，Copy code 保持复制原始代码。
 
-补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。剩余后续增强仍按本文各节的“后续增强/非目标”推进，例如搜索结果分组、消息虚拟滚动、表格排序/下载、Mermaid 下载、diff 专用样式和组件级测试。
+补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。第三轮已完成搜索结果按会话分组、命中点击 query 注入、memory 命中滚动到 Context 区、长会话消息虚拟滚动试点、表格搜索/排序/CSV 下载、代码下载与 diff 专用样式、Mermaid 预览/复制 SVG/下载 SVG/PNG，并新增 Vitest 组件测试。剩余后续增强主要是更细粒度的搜索结果分面、Markdown AST 级缓存、虚拟滚动视觉 smoke、XLSX 导出和更完整的 e2e 测试。
 
 ## 1. 会话内全文搜索和跳转
 
@@ -301,13 +301,13 @@
 ### 后续增强
 
 - Markdown heading outline。
-- Mermaid Open Large / Copy SVG / Download SVG。
-- 表格 sticky header / Download CSV。
+- Mermaid 已支持 Preview / Copy SVG / Download SVG / Download PNG。
+- 表格已支持 sticky header / row search / sort / Download CSV。
 - 代码 Download file。
 
 ### 非目标
 
-- 第一版不做虚拟滚动。
+- 已完成长会话虚拟滚动试点：超过阈值后按 message group 窗口化渲染，并保留搜索/turn 跳转的估算滚动 fallback。
 - 第一版不引入 Monaco。
 - 第一版不替换 highlight.js。
 - 第一版不做复杂代码选行复制。

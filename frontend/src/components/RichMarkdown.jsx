@@ -42,6 +42,25 @@ const HIGHLIGHT_LANGUAGES = new Set([
 const MAX_HIGHLIGHT_CHARS = 80000;
 const LONG_CODE_LINES = 120;
 const COLLAPSED_CODE_LINES = 80;
+const CODE_FILE_EXTENSIONS = {
+  javascript: 'js',
+  typescript: 'ts',
+  python: 'py',
+  bash: 'sh',
+  json: 'json',
+  yaml: 'yaml',
+  markdown: 'md',
+  css: 'css',
+  xml: 'xml',
+  sql: 'sql',
+  go: 'go',
+  rust: 'rs',
+  java: 'java',
+  cpp: 'cpp',
+  csharp: 'cs',
+  diff: 'diff',
+  text: 'txt',
+};
 
 let katexPromise;
 let highlightPromise;
@@ -167,6 +186,29 @@ const copyText = async (content) => {
   }
 };
 
+
+const downloadText = (filename, content, mimeType = 'text/plain;charset=utf-8') => {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const codeFilenameFor = (language) => `snippet.${CODE_FILE_EXTENSIONS[language] || 'txt'}`;
+
+const diffLineClass = (line) => {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'metadata';
+  if (line.startsWith('@@')) return 'hunk';
+  if (line.startsWith('+')) return 'addition';
+  if (line.startsWith('-')) return 'deletion';
+  return '';
+};
+
 function CopyControl({ content, label = 'Copy' }) {
   const [copied, setCopied] = useState(false);
 
@@ -243,26 +285,32 @@ function useHighlightedCode(code, language, mode, enabled = true) {
 function CodeBlock({ className, children, mode }) {
   const code = String(children || '').replace(/\n$/, '');
   const language = normalizeLanguage(className);
-  const { html, state } = useHighlightedCode(code, language, mode, language !== 'mermaid');
   const lineCount = Math.max(1, code.split('\n').length);
   const isLongCode = mode === 'full' && lineCount > LONG_CODE_LINES;
   const [isExpanded, setIsExpanded] = useState(false);
   const isCollapsed = isLongCode && !isExpanded;
-  const visibleLineCount = isCollapsed ? Math.min(COLLAPSED_CODE_LINES, lineCount) : lineCount;
+  const displayedLines = isCollapsed ? code.split('\n').slice(0, COLLAPSED_CODE_LINES) : code.split('\n');
+  const displayedCode = displayedLines.join('\n');
+  const visibleLineCount = displayedLines.length;
   const lineNumbers = Array.from({ length: visibleLineCount }, (_, index) => index + 1);
+  const isDiff = language === 'diff';
+  const { html, state } = useHighlightedCode(displayedCode, language, mode, language !== 'mermaid' && !isDiff);
 
   if (language === 'mermaid') {
     return <MermaidBlock code={code} mode={mode} />;
   }
 
   return (
-    <div className={`rich-code-block ${state === 'plain' ? 'plain-code' : ''} ${isCollapsed ? 'collapsed-code' : ''}`.trim()}>
+    <div className={`rich-code-block ${state === 'plain' ? 'plain-code' : ''} ${isDiff ? 'diff-code' : ''} ${isCollapsed ? 'collapsed-code' : ''}`.trim()}>
       <div className="rich-code-header">
         <span>{language}</span>
         <div className="rich-header-actions">
           {state === 'loading' && <span className="rich-runtime-status">highlighting</span>}
           {state === 'large' && <span className="rich-runtime-status">plain large block</span>}
           {lineCount > 1 && <span className="rich-runtime-status">{lineCount} lines</span>}
+          <button type="button" className="rich-copy" onClick={() => downloadText(codeFilenameFor(language), code)}>
+            Download
+          </button>
           <CopyControl content={code} label="Copy code" />
         </div>
       </div>
@@ -273,7 +321,17 @@ function CodeBlock({ className, children, mode }) {
               <span key={lineNumber}>{lineNumber}</span>
             ))}
           </span>
-          <span className="rich-code-content" dangerouslySetInnerHTML={{ __html: html || '&nbsp;' }} />
+          {isDiff ? (
+            <span className="rich-code-content rich-diff-lines">
+              {displayedLines.map((line, index) => (
+                <span className={`rich-diff-line ${diffLineClass(line)}`.trim()} key={`${index}-${line.slice(0, 12)}`}>
+                  {line || ' '}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="rich-code-content" dangerouslySetInnerHTML={{ __html: html || '&nbsp;' }} />
+          )}
         </code>
       </pre>
       {isLongCode && (
@@ -334,7 +392,36 @@ function useMermaidSvg(code, mode) {
 
 function MermaidBlock({ code, mode }) {
   const { svg, error, state } = useMermaidSvg(code, mode);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const isDeferred = state === 'deferred';
+  const filename = `diagram-${stableHash(code)}.svg`;
+
+  const downloadPng = async () => {
+    if (!svg) return;
+    const image = new Image();
+    const svgUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, image.naturalWidth || image.width || 1200);
+      canvas.height = Math.max(1, image.naturalHeight || image.height || 800);
+      const context = canvas.getContext('2d');
+      context?.drawImage(image, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const pngUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = pngUrl;
+        link.download = filename.replace(/\.svg$/, '.png');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(pngUrl);
+      }, 'image/png');
+      URL.revokeObjectURL(svgUrl);
+    };
+    image.onerror = () => URL.revokeObjectURL(svgUrl);
+    image.src = svgUrl;
+  };
 
   return (
     <div className="rich-mermaid-block">
@@ -342,7 +429,11 @@ function MermaidBlock({ code, mode }) {
         <span>mermaid</span>
         <div className="rich-header-actions">
           {state === 'loading' && <span className="rich-runtime-status">rendering</span>}
-          <CopyControl content={code} label="Copy diagram" />
+          {svg && <button type="button" className="rich-copy" onClick={() => setPreviewOpen(true)}>Preview</button>}
+          {svg && <CopyControl content={svg} label="Copy SVG" />}
+          {svg && <button type="button" className="rich-copy" onClick={() => downloadText(filename, svg, 'image/svg+xml;charset=utf-8')}>SVG</button>}
+          {svg && <button type="button" className="rich-copy" onClick={downloadPng}>PNG</button>}
+          <CopyControl content={code} label="Copy source" />
         </div>
       </div>
       {svg ? (
@@ -358,6 +449,15 @@ function MermaidBlock({ code, mode }) {
             </pre>
           )}
         </>
+      )}
+      {previewOpen && (
+        <div className="rich-mermaid-preview" role="dialog" aria-modal="true" aria-label="Mermaid diagram preview">
+          <div className="rich-mermaid-preview-toolbar">
+            <span>Mermaid preview</span>
+            <button type="button" className="rich-copy" onClick={() => setPreviewOpen(false)}>Close</button>
+          </div>
+          <div className="rich-mermaid-preview-canvas" dangerouslySetInnerHTML={{ __html: svg }} />
+        </div>
       )}
     </div>
   );
@@ -473,9 +573,15 @@ function InlineMathContainer({ as: Tag, children, mode, ...props }) {
 function MarkdownTable({ children }) {
   const tableRef = useRef(null);
   const [copied, setCopied] = useState('');
+  const [filter, setFilter] = useState('');
+  const [sortConfig, setSortConfig] = useState({ column: '', direction: 'asc' });
+  const [columnLabels, setColumnLabels] = useState([]);
+
+  const rowsForExport = () => Array.from(tableRef.current?.querySelectorAll('tr') || [])
+    .filter(row => row.style.display !== 'none');
 
   const tableAs = (format) => {
-    const rows = Array.from(tableRef.current?.querySelectorAll('tr') || []);
+    const rows = rowsForExport();
     const serialized = rows.map(row => {
       const cells = Array.from(row.querySelectorAll('th,td')).map(cell => cell.textContent.trim());
       if (format === 'csv') {
@@ -499,15 +605,85 @@ function MarkdownTable({ children }) {
     window.setTimeout(() => setCopied(''), 1600);
   };
 
+  const compareCells = (a, b, columnIndex) => {
+    const aText = a.children[columnIndex]?.textContent.trim() || '';
+    const bText = b.children[columnIndex]?.textContent.trim() || '';
+    const aNumber = Number(aText.replace(/,/g, ''));
+    const bNumber = Number(bText.replace(/,/g, ''));
+    if (!Number.isNaN(aNumber) && !Number.isNaN(bNumber)) return aNumber - bNumber;
+    const aDate = Date.parse(aText);
+    const bDate = Date.parse(bText);
+    if (!Number.isNaN(aDate) && !Number.isNaN(bDate)) return aDate - bDate;
+    return aText.localeCompare(bText, undefined, { numeric: true, sensitivity: 'base' });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      const table = tableRef.current?.querySelector('table');
+      const firstRow = table?.querySelector('tr');
+      if (!firstRow) return;
+      setColumnLabels(Array.from(firstRow.querySelectorAll('th,td')).map((cell, index) => cell.textContent.trim() || `Column ${index + 1}`));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [children]);
+
+  useEffect(() => {
+    const table = tableRef.current?.querySelector('table');
+    const body = table?.querySelector('tbody');
+    if (!body) return;
+
+    const rows = Array.from(body.querySelectorAll('tr'));
+    const normalizedFilter = filter.trim().toLowerCase();
+    rows.forEach((row) => {
+      row.style.display = !normalizedFilter || row.textContent.toLowerCase().includes(normalizedFilter) ? '' : 'none';
+    });
+
+    if (sortConfig.column !== '') {
+      const columnIndex = Number(sortConfig.column);
+      rows
+        .sort((a, b) => compareCells(a, b, columnIndex) * (sortConfig.direction === 'desc' ? -1 : 1))
+        .forEach(row => body.appendChild(row));
+    }
+  }, [filter, sortConfig]);
+
   return (
     <div className="rich-table-wrap">
       <div className="rich-table-actions">
         <span>Table</span>
+        <input
+          type="search"
+          className="rich-table-search"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder="Find rows"
+          aria-label="Search table rows"
+        />
+        <select
+          className="rich-table-sort"
+          value={sortConfig.column}
+          onChange={(event) => setSortConfig({ column: event.target.value, direction: 'asc' })}
+          aria-label="Sort table column"
+        >
+          <option value="">No sort</option>
+          {columnLabels.map((label, index) => <option value={index} key={`${label}-${index}`}>{label}</option>)}
+        </select>
+        {sortConfig.column !== '' && (
+          <button type="button" className="rich-copy" onClick={() => setSortConfig((current) => ({ ...current, direction: current.direction === 'asc' ? 'desc' : 'asc' }))}>
+            {sortConfig.direction === 'asc' ? 'Asc' : 'Desc'}
+          </button>
+        )}
         <button type="button" className={`rich-copy ${copied === 'markdown' ? 'copied' : ''}`} onClick={() => handleCopy('markdown')}>
           {copied === 'markdown' ? 'Copied' : 'Copy Markdown'}
         </button>
         <button type="button" className={`rich-copy ${copied === 'csv' ? 'copied' : ''}`} onClick={() => handleCopy('csv')}>
           {copied === 'csv' ? 'Copied' : 'Copy CSV'}
+        </button>
+        <button type="button" className="rich-copy" onClick={() => downloadText('table.csv', tableAs('csv'), 'text/csv;charset=utf-8')}>
+          Download CSV
         </button>
       </div>
       <div className="rich-table-scroll" ref={tableRef}>

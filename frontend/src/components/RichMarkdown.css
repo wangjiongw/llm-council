@@ -139,6 +139,31 @@
   text-transform: uppercase;
 }
 
+
+.rich-table-search,
+.rich-table-sort {
+  min-height: 28px;
+  min-width: 96px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.rich-table-search {
+  flex: 1 1 120px;
+  padding: 4px 8px;
+}
+
+.rich-table-sort {
+  flex: 0 1 140px;
+  padding: 4px 6px;
+}
+
 .rich-table-scroll {
   overflow: auto;
   max-height: 520px;
@@ -148,6 +173,14 @@
   margin: 0;
   border-radius: 0;
   box-shadow: none;
+}
+
+
+.rich-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
 }
 
 .rich-image-button {
@@ -268,6 +301,43 @@
   width: max-content;
   max-width: 100%;
   min-width: 320px;
+  height: auto;
+  margin: 0 auto;
+}
+
+
+.rich-mermaid-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.rich-mermaid-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.rich-mermaid-preview-canvas {
+  overflow: auto;
+  padding: 24px;
+  background: var(--surface-bg);
+}
+
+.rich-mermaid-preview-canvas svg {
+  display: block;
+  width: max-content;
+  min-width: min(960px, 100%);
+  max-width: none;
   height: auto;
   margin: 0 auto;
 }
@@ -398,4 +468,37 @@
   padding-left: 12px;
   border-left: 1px solid color-mix(in srgb, var(--code-border) 80%, transparent);
   white-space: pre;
+}
+
+
+.rich-diff-lines {
+  padding-left: 0;
+}
+
+.rich-diff-line {
+  display: block;
+  min-height: 1.55em;
+  padding-left: 12px;
+  border-left: 1px solid color-mix(in srgb, var(--code-border) 80%, transparent);
+}
+
+.rich-diff-line.addition {
+  background: color-mix(in srgb, #1a7f37 14%, transparent);
+  color: var(--code-text);
+}
+
+.rich-diff-line.deletion {
+  background: color-mix(in srgb, #cf222e 14%, transparent);
+  color: var(--code-text);
+}
+
+.rich-diff-line.hunk {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.rich-diff-line.metadata {
+  color: var(--text-muted);
+  font-weight: 700;
 }
