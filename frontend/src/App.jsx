@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import LLMSettingsModal from './components/LLMSettingsModal';
@@ -7,6 +7,15 @@ import { processUploadedFiles } from './utils/fileUtils';
 import './App.css';
 
 const THEME_STORAGE_KEY = 'llm-council-theme';
+const SIDEBAR_WIDTH_STORAGE_KEY = 'llm-council-sidebar-width';
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 520;
+
+const clampSidebarWidth = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 260;
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, numeric));
+};
 
 function App() {
   const [conversations, setConversations] = useState([]);
@@ -21,6 +30,8 @@ function App() {
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || 'light');
+  const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)));
+  const [pendingMessageJump, setPendingMessageJump] = useState(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -30,6 +41,12 @@ function App() {
   const handleToggleTheme = () => {
     setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
   };
+
+  const handleSidebarResize = useCallback((nextWidth) => {
+    const width = clampSidebarWidth(nextWidth);
+    setSidebarWidth(width);
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width));
+  }, []);
 
   // Load conversations on mount
   useEffect(() => {
@@ -76,12 +93,7 @@ function App() {
     try {
       const newConv = await api.createConversation();
       setConversations([
-        {
-          id: newConv.id,
-          created_at: newConv.created_at,
-          message_count: 0,
-          title: newConv.title || 'New Conversation'
-        },
+        conversationMetadataFromConversation(newConv),
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
@@ -98,33 +110,73 @@ function App() {
     setCurrentContextAudit(null);
     setCurrentContextPolicy(null);
     setAttachedFiles([]);
+    setPendingMessageJump(null);
+  };
+
+  const handleSelectSearchResult = (result) => {
+    const conversationId = result?.conversation_id;
+    if (!conversationId) return;
+
+    setCurrentConversationId(conversationId);
+    setCurrentContextAudit(null);
+    setCurrentContextPolicy(null);
+    setAttachedFiles([]);
+
+    if (Number.isInteger(result.message_index)) {
+      setPendingMessageJump({
+        conversationId,
+        messageIndex: result.message_index,
+        nonce: Date.now(),
+      });
+    } else {
+      setPendingMessageJump(null);
+    }
+  };
+
+  const conversationMetadataFromConversation = (conversation, fallback = {}) => ({
+    ...fallback,
+    id: conversation.id,
+    created_at: conversation.created_at,
+    updated_at: conversation.updated_at || conversation.created_at,
+    message_count: conversation.messages?.length ?? fallback.message_count ?? 0,
+    title: conversation.title || fallback.title || 'New Conversation',
+    favorite: Boolean(conversation.favorite),
+    archived: Boolean(conversation.archived),
+    pinned: Boolean(conversation.pinned),
+    tags: Array.isArray(conversation.tags) ? conversation.tags : [],
+  });
+
+  const mergeConversationMetadata = (conversation) => {
+    setConversations(prevConversations =>
+      prevConversations.map(conv =>
+        conv.id === conversation.id
+          ? conversationMetadataFromConversation(conversation, conv)
+          : conv
+      )
+    );
+
+    if (currentConversation?.id === conversation.id) {
+      setCurrentConversation(prev => ({
+        ...prev,
+        ...conversation,
+      }));
+    }
+  };
+
+  const handleUpdateConversationMetadata = async (conversationId, updates) => {
+    try {
+      const updatedConversation = await api.updateConversation(conversationId, updates);
+      mergeConversationMetadata(updatedConversation);
+      return updatedConversation;
+    } catch (error) {
+      console.error('Failed to update conversation:', error);
+      alert('Failed to update conversation. Please try again.');
+      throw error;
+    }
   };
 
   const handleUpdateTitle = async (conversationId, newTitle) => {
-    try {
-      // Update on backend
-      await api.updateConversationTitle(conversationId, newTitle);
-
-      // Update in conversations list
-      setConversations(prevConversations =>
-        prevConversations.map(conv =>
-          conv.id === conversationId
-            ? { ...conv, title: newTitle }
-            : conv
-        )
-      );
-
-      // Update current conversation if it's the active one
-      if (currentConversation?.id === conversationId) {
-        setCurrentConversation(prev => ({
-          ...prev,
-          title: newTitle
-        }));
-      }
-    } catch (error) {
-      console.error('Failed to update title:', error);
-      alert('Failed to update title. Please try again.');
-    }
+    await handleUpdateConversationMetadata(conversationId, { title: newTitle });
   };
 
   const handleUpdateContextPolicy = async (policyUpdates) => {
@@ -192,10 +244,10 @@ function App() {
     return api.previewConversationContext(currentConversationId, content, mode, files || []);
   };
 
-  const handleSearchConversationHistory = async (query) => {
+  const handleSearchConversationHistory = useCallback(async (query) => {
     const response = await api.searchConversationHistory(query, 20);
     return response.results || [];
-  };
+  }, []);
 
 
   const handleReplayMessageContext = async (messageIndex, mode = null) => {
@@ -240,12 +292,7 @@ function App() {
     try {
       const branch = await api.forkConversation(currentConversationId, messageIndex);
       setConversations(prevConversations => [
-        {
-          id: branch.id,
-          created_at: branch.created_at,
-          message_count: branch.messages?.length || 0,
-          title: branch.title || 'Branched Conversation',
-        },
+        conversationMetadataFromConversation(branch, { title: 'Branched Conversation' }),
         ...prevConversations,
       ]);
       setCurrentConversationId(branch.id);
@@ -321,12 +368,7 @@ function App() {
           // No conversations left, create new one
           const newConv = await api.createConversation();
           setConversations([
-            {
-              id: newConv.id,
-              created_at: newConv.created_at,
-              message_count: 0,
-              title: newConv.title || 'New Conversation'
-            }
+            conversationMetadataFromConversation(newConv)
           ]);
           setCurrentConversationId(newConv.id);
         }
@@ -939,10 +981,17 @@ function App() {
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
         onUpdateTitle={handleUpdateTitle}
+        onUpdateMetadata={handleUpdateConversationMetadata}
         onDeleteConversation={handleDeleteConversation}
+        onSearchConversationHistory={handleSearchConversationHistory}
+        onSelectSearchResult={handleSelectSearchResult}
         onOpenSettings={() => setSettingsOpen(true)}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        width={sidebarWidth}
+        minWidth={SIDEBAR_MIN_WIDTH}
+        maxWidth={SIDEBAR_MAX_WIDTH}
+        onResize={handleSidebarResize}
       />
       <ChatInterface
         conversation={currentConversation}
@@ -972,6 +1021,8 @@ function App() {
         onFilesChange={setAttachedFiles}
         onFileUpload={handleFileUpload}
         onDeleteFile={handleDeleteFile}
+        messageJumpTarget={pendingMessageJump}
+        onMessageJumpHandled={() => setPendingMessageJump(null)}
         draftToRestore={draftToRestore}
         onDraftRestored={() => setDraftToRestore(null)}
       />

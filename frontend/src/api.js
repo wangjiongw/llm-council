@@ -358,11 +358,11 @@ export const api = {
   },
 
   /**
-   * Update conversation title.
+   * Update conversation metadata.
    * @param {string} conversationId - The conversation ID
-   * @param {string} title - The new title
+   * @param {object} updates - Partial metadata updates
    */
-  async updateConversationTitle(conversationId, title) {
+  async updateConversation(conversationId, updates) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}`,
       {
@@ -370,13 +370,23 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify(updates),
       }
     );
     if (!response.ok) {
-      throw new Error('Failed to update conversation title');
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update conversation');
     }
     return response.json();
+  },
+
+  /**
+   * Update conversation title.
+   * @param {string} conversationId - The conversation ID
+   * @param {string} title - The new title
+   */
+  async updateConversationTitle(conversationId, title) {
+    return this.updateConversation(conversationId, { title });
   },
 
   /**

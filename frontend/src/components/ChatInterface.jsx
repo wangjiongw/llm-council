@@ -27,10 +27,38 @@ const contentToText = (content) => {
 const DRAFT_STORAGE_PREFIX = 'llm-council:draft:';
 const LONG_USER_MESSAGE_CHARS = 2200;
 const LONG_USER_MESSAGE_LINES = 44;
+const SEARCH_SCOPE_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'user', label: 'User' },
+  { value: 'assistant', label: 'Answer' },
+  { value: 'council', label: 'Council' },
+  { value: 'files', label: 'Files' },
+];
 
 const isLongText = (text, maxChars, maxLines) => (
   text.length > maxChars || text.split('\n').length > maxLines
 );
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const countOccurrences = (text, query) => {
+  if (!query) return 0;
+  const matches = String(text || '').match(new RegExp(escapeRegExp(query), 'gi'));
+  return matches?.length || 0;
+};
+
+const HighlightedText = memo(function HighlightedText({ text, query }) {
+  const source = String(text || '');
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return source;
+
+  const pattern = new RegExp(`(${escapeRegExp(cleanQuery)})`, 'gi');
+  return source.split(pattern).map((part, index) => (
+    part.toLowerCase() === cleanQuery.toLowerCase()
+      ? <mark className="search-hit" key={`${part}-${index}`}>{part}</mark>
+      : part
+  ));
+});
 
 // Collapsible section component for Stage 1 and Stage 2
 const CollapsibleStage = memo(function CollapsibleStage({
@@ -102,6 +130,14 @@ const summarizeResults = (results = [], contentKey) => {
 
 const formatStageSummary = (label, summary) => `${label} ${summary.success}/${summary.total || 0}${summary.failed ? `, ${summary.failed} failed` : ''}`;
 
+const stageModelBreakdown = (items = [], contentKey) => items.map((item) => ({
+  model: shortModelName(item?.model),
+  status: item?.status === 'failed' || !item?.[contentKey] ? 'failed' : 'ok',
+  errorType: item?.error_type || '',
+  duration: item?.duration_seconds,
+  tokens: item?.usage?.total_tokens || 0,
+}));
+
 const sumTokens = (...items) => items.flat().reduce((total, item) => {
   const usage = item?.usage || {};
   return total + (usage.total_tokens || 0);
@@ -115,25 +151,40 @@ const maxDuration = (...items) => {
 };
 
 const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
-  if (msg.metadata?.mode === 'quick') return null;
-
+  const isQuick = msg.metadata?.mode === 'quick';
   const stage1 = summarizeResults(msg.stage1 || [], 'response');
   const stage2 = summarizeResults(msg.stage2 || [], 'ranking');
   const attempts = msg.stage3?.metadata?.attempts || msg.metadata?.attempts || [];
   const warnings = msg.metadata?.warnings || [];
   const tokenTotal = sumTokens(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
   const slowestStageDuration = maxDuration(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
+  const failedModels = [
+    ...(msg.stage1 || []),
+    ...(msg.stage2 || []),
+    ...(attempts || []).filter(attempt => attempt && !attempt.ok),
+  ]
+    .filter(item => item?.status === 'failed' || item?.error || item?.error_type)
+    .map(item => shortModelName(item.model))
+    .filter(Boolean);
+  const uniqueFailedModels = [...new Set(failedModels)];
   const hasData = stage1.total > 0 || stage2.total > 0 || msg.stage3 || attempts.length > 0 || warnings.length > 0;
 
   if (!hasData) return null;
 
+  const stage1Breakdown = stageModelBreakdown(msg.stage1 || [], 'response');
+  const stage2Breakdown = stageModelBreakdown(msg.stage2 || [], 'ranking');
+  const stage3Tokens = msg.stage3?.usage?.total_tokens || 0;
+  const hasBreakdown = stage1Breakdown.length > 0 || stage2Breakdown.length > 0 || attempts.length > 0 || stage3Tokens > 0;
+
   return (
-    <div className="council-run-summary" aria-label="Council run summary">
+    <div className="council-run-summary" aria-label={isQuick ? 'Quick run summary' : 'Council run summary'}>
       <div className="council-summary-main">
-        <span className="council-summary-title">Council summary</span>
-        {stage1.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 1', stage1)}</span>}
-        {stage2.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 2', stage2)}</span>}
-        {msg.stage3?.model && <span className="council-summary-chip">Chair {shortModelName(msg.stage3.model)}</span>}
+        <span className="council-summary-title">{isQuick ? 'Quick summary' : 'Council summary'}</span>
+        {isQuick && msg.stage3?.status && <span className="council-summary-chip">Status {msg.stage3.status}</span>}
+        {!isQuick && stage1.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 1', stage1)}</span>}
+        {!isQuick && stage2.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 2', stage2)}</span>}
+        {msg.stage3?.model && <span className="council-summary-chip">{isQuick ? 'Model' : 'Chair'} {shortModelName(msg.stage3.model)}</span>}
+        {uniqueFailedModels.length > 0 && <span className="council-summary-chip warning">{uniqueFailedModels.length} model failure{uniqueFailedModels.length === 1 ? '' : 's'}</span>}
         {attempts.length > 1 && <span className="council-summary-chip">{attempts.length - 1} fallback attempt{attempts.length === 2 ? '' : 's'}</span>}
         {tokenTotal > 0 && <span className="council-summary-chip">{tokenTotal} tokens</span>}
         {slowestStageDuration != null && <span className="council-summary-chip">slowest {slowestStageDuration}s</span>}
@@ -142,6 +193,31 @@ const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
         <div className="council-summary-warnings">
           {warnings.map((warning, index) => <span key={`${warning}-${index}`}>{warning}</span>)}
         </div>
+      )}
+      {hasBreakdown && (
+        <details className="council-summary-details">
+          <summary>Model contribution and timing</summary>
+          <div className="council-contribution-grid">
+            {stage1Breakdown.map((item, index) => (
+              <span className={item.status === 'failed' ? 'failed' : ''} key={`s1-${item.model}-${index}`}>
+                Stage 1 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}
+              </span>
+            ))}
+            {stage2Breakdown.map((item, index) => (
+              <span className={item.status === 'failed' ? 'failed' : ''} key={`s2-${item.model}-${index}`}>
+                Stage 2 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}
+              </span>
+            ))}
+            {attempts.map((attempt, index) => (
+              <span className={attempt.ok ? '' : 'failed'} key={`attempt-${attempt.model}-${index}`}>
+                Stage 3 attempt {index + 1} · {shortModelName(attempt.model)}: {attempt.ok ? 'ok' : (attempt.error_type || 'failed')}
+              </span>
+            ))}
+            {msg.stage3?.model && (
+              <span>Final · {shortModelName(msg.stage3.model)}{stage3Tokens ? ` · ${stage3Tokens} tokens` : ''}{msg.stage3.duration_seconds != null ? ` · ${msg.stage3.duration_seconds}s` : ''}</span>
+            )}
+          </div>
+        </details>
       )}
     </div>
   );
@@ -155,17 +231,20 @@ const classifyError = (msg) => {
   const errorType = stage3.error_type || msg.error_type || failedAttempt?.error_type || failedStage1?.error_type || failedStage2?.error_type || 'unknown_error';
   const error = stage3.error || msg.error || failedAttempt?.error || failedStage1?.error || failedStage2?.error || '';
 
+  if (/context|token|length/i.test(`${errorType} ${error}`)) {
+    return { title: 'Context payload needs adjustment', detail: 'The request likely exceeded provider or policy context limits.', action: 'Open Context Policy or preview the context package before retrying.', settings: false, context: true };
+  }
   if (errorType === 'disabled_model') {
-    return { title: 'Model disabled', detail: 'One configured model is disabled or unavailable.', action: 'Open LLM settings and enable or replace the model.', settings: true };
+    return { title: 'Model disabled', detail: 'One configured model is disabled or unavailable.', action: 'Open LLM settings and enable or replace the model.', settings: true, diagnostics: true };
   }
   if (errorType === 'http_status' && /401|403/.test(error)) {
-    return { title: 'Provider authentication failed', detail: 'The provider rejected the request.', action: 'Check API key and base URL in LLM settings.', settings: true };
+    return { title: 'Provider authentication failed', detail: 'The provider rejected the request.', action: 'Check API key and base URL in LLM settings.', settings: true, diagnostics: true };
   }
   if (errorType === 'http_status' && /429/.test(error)) {
-    return { title: 'Provider rate limited the request', detail: 'The model provider returned a rate limit response.', action: 'Retry later or switch to another fallback model.', settings: true };
+    return { title: 'Provider rate limited the request', detail: 'The model provider returned a rate limit response.', action: 'Retry later or switch to another fallback model.', settings: true, diagnostics: true };
   }
   if (errorType === 'timeout' || errorType === 'network_error') {
-    return { title: 'Provider request did not complete', detail: 'The model call timed out or hit a network error.', action: 'Retry the turn, continue saved stages, or choose a faster fallback model.', settings: false };
+    return { title: 'Provider request did not complete', detail: 'The model call timed out or hit a network error.', action: 'Retry the turn, continue saved stages, or choose a faster fallback model.', settings: false, diagnostics: true };
   }
   if (errorType === 'all_stage1_models_failed') {
     return { title: 'All Stage 1 models failed', detail: 'No council member returned a usable first-stage response.', action: 'Retry after checking model availability and provider settings.', settings: true };
@@ -176,12 +255,32 @@ const classifyError = (msg) => {
   return { title: 'Council run needs attention', detail: error || 'A model call failed or the saved run is incomplete.', action: 'Retry the turn or inspect context/model details below.', settings: false };
 };
 
-const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onContinue, onRetry, onOpenSettings }) {
-  const hasFailure = msg.status === 'failed' || msg.stage3?.status === 'failed';
+const errorDetailsForMessage = (msg) => {
+  const stage3 = msg.stage3 || {};
+  const failedStage1 = (msg.stage1 || []).filter(result => result?.status === 'failed' || result?.error);
+  const failedStage2 = (msg.stage2 || []).filter(result => result?.status === 'failed' || result?.error);
+  const failedAttempts = (stage3.metadata?.attempts || []).filter(attempt => attempt && !attempt.ok);
+  return [
+    msg.error_type && `message error_type: ${msg.error_type}`,
+    msg.error && `message error: ${msg.error}`,
+    stage3.error_type && `stage3 error_type: ${stage3.error_type}`,
+    stage3.error && `stage3 error: ${stage3.error}`,
+    ...failedStage1.map(result => `stage1 ${shortModelName(result.model)}: ${result.error_type || 'failed'} ${result.error || ''}`.trim()),
+    ...failedStage2.map(result => `stage2 ${shortModelName(result.model)}: ${result.error_type || 'failed'} ${result.error || ''}`.trim()),
+    ...failedAttempts.map(attempt => `fallback ${shortModelName(attempt.model)}: ${attempt.error_type || 'failed'} ${attempt.error || ''}`.trim()),
+  ].filter(Boolean);
+};
+
+const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onContinue, onRetry, onOpenSettings, onOpenContextPolicy }) {
+  const hasFailure = msg.status === 'failed' ||
+    msg.status === 'interrupted' ||
+    msg.stage3?.status === 'failed' ||
+    msg.stage3?.status === 'interrupted';
 
   if (!hasFailure) return null;
 
   const info = classifyError(msg);
+  const details = errorDetailsForMessage(msg);
 
   return (
     <div className="error-action-panel">
@@ -189,6 +288,12 @@ const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onCo
         <strong>{info.title}</strong>
         <span>{info.detail}</span>
         <span>{info.action}</span>
+        {details.length > 0 && (
+          <details className="error-technical-details">
+            <summary>Technical details</summary>
+            <pre>{details.join('\n')}</pre>
+          </details>
+        )}
       </div>
       <div className="error-action-buttons">
         {canContinue && (
@@ -199,9 +304,19 @@ const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onCo
         <button type="button" className="retry-button" onClick={onRetry}>
           Retry
         </button>
+        {info.context && onOpenContextPolicy && (
+          <button type="button" className="settings-inline-button" onClick={onOpenContextPolicy}>
+            Context Policy
+          </button>
+        )}
         {info.settings && onOpenSettings && (
           <button type="button" className="settings-inline-button" onClick={onOpenSettings}>
             LLM Settings
+          </button>
+        )}
+        {info.diagnostics && (
+          <button type="button" className="settings-inline-button" onClick={() => document.querySelector('.error-technical-details summary')?.click()}>
+            Diagnostics
           </button>
         )}
       </div>
@@ -393,6 +508,7 @@ const MessageItem = memo(function MessageItem({
   onForkConversation,
   onReplayMessageContext,
   onOpenSettings,
+  onOpenContextPolicy,
   isLastMessage,
   messageIndex,
   turnAnchorRef,
@@ -588,6 +704,7 @@ const MessageItem = memo(function MessageItem({
             onContinue={() => onResumeQuery?.(messageIndex)}
             onRetry={() => onRetryQuery?.()}
             onOpenSettings={onOpenSettings}
+            onOpenContextPolicy={onOpenContextPolicy}
           />
 
           {/* Enhanced loading states with context awareness */}
@@ -741,6 +858,8 @@ export default function ChatInterface({
   onFilesChange,
   onFileUpload,
   onDeleteFile,
+  messageJumpTarget,
+  onMessageJumpHandled,
   draftToRestore,
   onDraftRestored,
 }) {
@@ -750,6 +869,7 @@ export default function ChatInterface({
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const contextPanelRef = useRef(null);
   const inputRef = useRef(null);
   const turnAnchorsRef = useRef(new Map());
   const messageAnchorsRef = useRef(new Map());
@@ -758,6 +878,7 @@ export default function ChatInterface({
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState(null);
   const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageSearchScope, setMessageSearchScope] = useState('all');
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const [editTarget, setEditTarget] = useState(null);
 
@@ -929,37 +1050,49 @@ export default function ChatInterface({
   }, [conversation]);
 
   const messageSearchResults = useMemo(() => {
-    const query = messageSearchQuery.trim().toLowerCase();
+    const rawQuery = messageSearchQuery.trim();
+    const query = rawQuery.toLowerCase();
     if (!query || !conversation?.messages) return [];
 
     return conversation.messages.reduce((results, msg, index) => {
-      const text = msg.role === 'assistant'
-        ? [
-            msg.stage3?.response || '',
-            ...(msg.stage1 || []).map(result => result?.response || result?.error || ''),
-            ...(msg.stage2 || []).map(result => result?.ranking || result?.error || ''),
-          ].join('\n')
-        : contentToText(msg.content);
+      const fileText = (msg.files || []).map(file => [file?.name, file?.type, file?.category].filter(Boolean).join(' ')).join('\n');
+      const assistantText = [msg.stage3?.response || ''].join('\n');
+      const councilText = [
+        ...(msg.stage1 || []).map(result => result?.response || result?.error || ''),
+        ...(msg.stage2 || []).map(result => result?.ranking || result?.error || ''),
+      ].join('\n');
+      const userTextForSearch = contentToText(msg.content);
+      const scopeText = {
+        all: [userTextForSearch, assistantText, councilText, fileText].join('\n'),
+        user: msg.role === 'user' ? userTextForSearch : '',
+        assistant: msg.role === 'assistant' ? assistantText : '',
+        council: msg.role === 'assistant' ? councilText : '',
+        files: fileText,
+      };
+      const text = scopeText[messageSearchScope] ?? scopeText.all;
       const lowerText = text.toLowerCase();
       const matchIndex = lowerText.indexOf(query);
       if (matchIndex === -1) return results;
 
       const excerptStart = Math.max(0, matchIndex - 48);
-      const excerpt = text.slice(excerptStart, matchIndex + query.length + 96).replace(/\s+/g, ' ').trim();
+      const excerpt = text.slice(excerptStart, matchIndex + rawQuery.length + 96).replace(/\s+/g, ' ').trim();
       results.push({
         messageIndex: index,
         role: msg.role,
+        scope: messageSearchScope,
+        matchCount: countOccurrences(text, rawQuery),
         turnNumber: Math.floor(index / 2) + 1,
-        excerpt: `${excerptStart > 0 ? '...' : ''}${excerpt}${matchIndex + query.length + 96 < text.length ? '...' : ''}`,
+        excerpt: `${excerptStart > 0 ? '...' : ''}${excerpt}${matchIndex + rawQuery.length + 96 < text.length ? '...' : ''}`,
       });
       return results;
     }, []);
-  }, [conversation, messageSearchQuery]);
+  }, [conversation, messageSearchQuery, messageSearchScope]);
 
   const showTurnNavigator = turnEntries.length > 1;
   const boundedCurrentTurnIndex = Math.max(0, Math.min(currentTurnIndex, turnEntries.length - 1));
   const boundedSearchResultIndex = Math.max(0, Math.min(activeSearchResultIndex, messageSearchResults.length - 1));
   const activeSearchResult = messageSearchResults[boundedSearchResultIndex] || null;
+  const messageSearchMatchTotal = messageSearchResults.reduce((total, result) => total + (result.matchCount || 0), 0);
 
   useEffect(() => {
     turnAnchorsRef.current.clear();
@@ -988,13 +1121,14 @@ export default function ChatInterface({
 
   const scrollToMessage = useCallback((messageIndex) => {
     const anchor = messageAnchorsRef.current.get(messageIndex);
-    if (!anchor) return;
+    if (!anchor) return false;
 
     anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setHighlightedMessageIndex(messageIndex);
     window.setTimeout(() => {
       setHighlightedMessageIndex(current => (current === messageIndex ? null : current));
     }, 1600);
+    return true;
   }, []);
 
   const jumpToSearchResult = useCallback((nextIndex) => {
@@ -1007,7 +1141,7 @@ export default function ChatInterface({
 
   useEffect(() => {
     setActiveSearchResultIndex(0);
-  }, [messageSearchQuery, conversation?.id]);
+  }, [messageSearchQuery, messageSearchScope, conversation?.id]);
 
   const scrollToTurn = useCallback((nextIndex) => {
     const boundedIndex = Math.max(0, Math.min(nextIndex, turnEntries.length - 1));
@@ -1024,6 +1158,10 @@ export default function ChatInterface({
     setCurrentTurnIndex(0);
   }, []);
 
+  const scrollToContextPanel = useCallback(() => {
+    contextPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
   const scrollMessagesToBottom = useCallback(() => {
     scrollToBottom();
     setCurrentTurnIndex(Math.max(0, turnEntries.length - 1));
@@ -1034,6 +1172,21 @@ export default function ChatInterface({
       scrollToMessage(activeSearchResult.messageIndex);
     }
   }, [activeSearchResult, messageSearchQuery, scrollToMessage]);
+
+  useEffect(() => {
+    if (!messageJumpTarget || messageJumpTarget.conversationId !== conversation?.id) return;
+    if (!Number.isInteger(messageJumpTarget.messageIndex)) {
+      onMessageJumpHandled?.();
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const didScroll = scrollToMessage(messageJumpTarget.messageIndex);
+      if (didScroll) onMessageJumpHandled?.();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversation?.id, conversation?.messages?.length, messageJumpTarget, onMessageJumpHandled, scrollToMessage]);
 
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -1260,12 +1413,30 @@ export default function ChatInterface({
                 type="search"
                 value={messageSearchQuery}
                 onChange={(event) => setMessageSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    jumpToSearchResult(boundedSearchResultIndex + (event.shiftKey ? -1 : 1));
+                  } else if (event.key === 'Escape') {
+                    setMessageSearchQuery('');
+                  }
+                }}
                 placeholder="Search in this conversation"
                 aria-label="Search in this conversation"
               />
+              <select
+                className="conversation-search-filter"
+                value={messageSearchScope}
+                onChange={(event) => setMessageSearchScope(event.target.value)}
+                aria-label="Search scope"
+              >
+                {SEARCH_SCOPE_OPTIONS.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
               <span className="conversation-search-status">
                 {messageSearchQuery.trim()
-                  ? `${messageSearchResults.length ? boundedSearchResultIndex + 1 : 0} / ${messageSearchResults.length}`
+                  ? `${messageSearchResults.length ? boundedSearchResultIndex + 1 : 0} / ${messageSearchResults.length}${messageSearchMatchTotal ? ` · ${messageSearchMatchTotal} hits` : ''}`
                   : `${conversation.messages.length} messages`}
               </span>
               <button
@@ -1301,13 +1472,13 @@ export default function ChatInterface({
                 onClick={() => jumpToSearchResult(boundedSearchResultIndex)}
               >
                 <span>{activeSearchResult.role} · Turn {activeSearchResult.turnNumber}</span>
-                <strong>{activeSearchResult.excerpt}</strong>
+                <strong><HighlightedText text={activeSearchResult.excerpt} query={messageSearchQuery} /></strong>
               </button>
             )}
 
             {/* Show conversation context for multi-turn conversations */}
             {hasPreviousTurns && (
-              <div className="conversation-section">
+              <div className="conversation-section" ref={contextPanelRef}>
                 <ConversationContext
                   recentMessages={conversationContext.recentMessages}
                   contextAudit={contextAudit}
@@ -1346,6 +1517,7 @@ export default function ChatInterface({
                   onForkConversation={isLoading ? null : onForkConversation}
                   onReplayMessageContext={isLoading ? null : onReplayMessageContext}
                   onOpenSettings={onOpenSettings}
+                  onOpenContextPolicy={scrollToContextPanel}
                   isLastMessage={index === conversation.messages.length - 1}
                   messageIndex={index}
                   turnAnchorRef={msg.role === 'user' ? (node) => registerTurnAnchor(index, node) : undefined}

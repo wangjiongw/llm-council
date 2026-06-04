@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './Sidebar.css';
 
 const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -20,11 +20,26 @@ const groupConversationDate = (value) => {
   return 'Older';
 };
 
-const groupConversations = (conversations) => {
+const sortConversations = (conversations) => [...conversations].sort((a, b) => {
+  const pinnedDelta = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+  if (pinnedDelta !== 0) return pinnedDelta;
+  const bTime = new Date(b.updated_at || b.created_at || 0).getTime() || 0;
+  const aTime = new Date(a.updated_at || a.created_at || 0).getTime() || 0;
+  return bTime - aTime;
+});
+
+const groupConversations = (conversations, { archivedView = false } = {}) => {
   const groups = [];
   const groupMap = new Map();
+  const sorted = sortConversations(conversations);
+  const pinned = archivedView ? [] : sorted.filter((conversation) => conversation.pinned);
+  const regular = archivedView ? sorted : sorted.filter((conversation) => !conversation.pinned);
 
-  conversations.forEach((conversation) => {
+  if (pinned.length > 0) {
+    groups.push({ label: 'Pinned', conversations: pinned });
+  }
+
+  regular.forEach((conversation) => {
     const label = groupConversationDate(conversation.updated_at || conversation.created_at);
     if (!groupMap.has(label)) {
       const group = { label, conversations: [] };
@@ -37,21 +52,106 @@ const groupConversations = (conversations) => {
   return groups;
 };
 
+const parseTags = (value) => value
+  .split(',')
+  .map((tag) => tag.trim())
+  .filter(Boolean);
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function HighlightedText({ text, query }) {
+  const source = String(text || '');
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return source;
+  const pattern = new RegExp(`(${escapeRegExp(cleanQuery)})`, 'gi');
+  return source.split(pattern).map((part, index) => (
+    part.toLowerCase() === cleanQuery.toLowerCase()
+      ? <mark className="search-hit" key={`${part}-${index}`}>{part}</mark>
+      : part
+  ));
+}
+
+const searchSourceLabel = (result) => {
+  if (result.source === 'title') return 'Title';
+  if (result.source === 'memory') return 'Memory';
+  if (result.role === 'user') return `User message ${Number.isInteger(result.message_index) ? result.message_index + 1 : ''}`.trim();
+  if (result.role === 'assistant') return `Assistant message ${Number.isInteger(result.message_index) ? result.message_index + 1 : ''}`.trim();
+  return result.source || 'Result';
+};
+
 export default function Sidebar({
   conversations,
   currentConversationId,
   onSelectConversation,
   onNewConversation,
   onUpdateTitle,
+  onUpdateMetadata,
   onDeleteConversation,
+  onSearchConversationHistory,
+  onSelectSearchResult,
   onOpenSettings,
   theme,
   onToggleTheme,
+  width = 260,
+  minWidth = 220,
+  maxWidth = 520,
+  onResize,
 }) {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+  const [tagEditingId, setTagEditingId] = useState(null);
+  const [tagInput, setTagInput] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
-  const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
+  const [viewMode, setViewMode] = useState('active');
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [tagFilter, setTagFilter] = useState('');
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [historySearchSource, setHistorySearchSource] = useState('all');
+  const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
+  const [historySearchResults, setHistorySearchResults] = useState([]);
+  const [historySearchLoading, setHistorySearchLoading] = useState(false);
+  const [historySearchError, setHistorySearchError] = useState('');
+  const [isResizing, setIsResizing] = useState(false);
+
+  const allTags = useMemo(() => {
+    const tags = new Set();
+    conversations.forEach((conversation) => {
+      (conversation.tags || []).forEach((tag) => tags.add(tag));
+    });
+    return [...tags].sort((a, b) => a.localeCompare(b));
+  }, [conversations]);
+
+  const visibleConversations = useMemo(() => {
+    return conversations.filter((conversation) => {
+      if (viewMode === 'archived' && !conversation.archived) return false;
+      if (viewMode === 'active' && conversation.archived) return false;
+      if (favoriteOnly && !conversation.favorite) return false;
+      if (tagFilter && !(conversation.tags || []).includes(tagFilter)) return false;
+      return true;
+    });
+  }, [conversations, favoriteOnly, tagFilter, viewMode]);
+
+  const conversationGroups = useMemo(
+    () => groupConversations(visibleConversations, { archivedView: viewMode === 'archived' }),
+    [visibleConversations, viewMode]
+  );
+
+  const visibleConversationIds = useMemo(
+    () => new Set(visibleConversations.map((conversation) => conversation.id)),
+    [visibleConversations]
+  );
+
+  const filteredSearchResults = useMemo(() => (historySearchResults || []).filter((result) => {
+    if (!visibleConversationIds.has(result.conversation_id)) return false;
+    if (historySearchSource === 'all') return true;
+    if (historySearchSource === 'message') return result.source === 'message';
+    if (historySearchSource === 'user') return result.role === 'user';
+    if (historySearchSource === 'assistant') return result.role === 'assistant';
+    return result.source === historySearchSource;
+  }), [historySearchResults, historySearchSource, visibleConversationIds]);
+
+  const activeSearchResult = filteredSearchResults[Math.max(0, Math.min(activeSearchResultIndex, filteredSearchResults.length - 1))] || null;
+
   const activeGroupLabel = useMemo(() => {
     const activeGroup = conversationGroups.find((group) =>
       group.conversations.some((conversation) => conversation.id === currentConversationId)
@@ -59,9 +159,48 @@ export default function Sidebar({
     return activeGroup?.label || '';
   }, [conversationGroups, currentConversationId]);
 
+  useEffect(() => {
+    const query = historySearchQuery.trim();
+    if (!query || !onSearchConversationHistory) {
+      setHistorySearchResults([]);
+      setHistorySearchError('');
+      setHistorySearchLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setHistorySearchLoading(true);
+    setHistorySearchError('');
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const results = await onSearchConversationHistory(query);
+        if (!cancelled) setHistorySearchResults(Array.isArray(results) ? results : []);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to search conversations:', error);
+          setHistorySearchResults([]);
+          setHistorySearchError('Search failed');
+        }
+      } finally {
+        if (!cancelled) setHistorySearchLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [historySearchQuery, onSearchConversationHistory]);
+
+  useEffect(() => {
+    setActiveSearchResultIndex(0);
+  }, [historySearchQuery, historySearchSource, filteredSearchResults.length]);
+
   const handleStartEdit = (conv) => {
     setEditingId(conv.id);
     setEditTitle(conv.title || 'New Conversation');
+    setTagEditingId(null);
   };
 
   const handleSaveEdit = async (convId) => {
@@ -84,8 +223,59 @@ export default function Sidebar({
     }
   };
 
+  const handleStartTagEdit = (conv) => {
+    setTagEditingId(conv.id);
+    setTagInput((conv.tags || []).join(', '));
+    setEditingId(null);
+  };
+
+  const handleSaveTags = async (convId) => {
+    await onUpdateMetadata(convId, { tags: parseTags(tagInput) });
+    setTagEditingId(null);
+    setTagInput('');
+  };
+
+  const handleTagKeyDown = (e, convId) => {
+    if (e.key === 'Enter') {
+      handleSaveTags(convId);
+    } else if (e.key === 'Escape') {
+      setTagEditingId(null);
+      setTagInput('');
+    }
+  };
+
   const handleDeleteConversation = (conversationId) => {
     onDeleteConversation(conversationId);
+  };
+
+  const handleMetadataClick = async (event, conv, updates) => {
+    event.stopPropagation();
+    await onUpdateMetadata(conv.id, updates);
+  };
+
+  const openSearchResult = (result) => {
+    if (!result) return;
+    if (onSelectSearchResult) {
+      onSelectSearchResult(result);
+    } else {
+      onSelectConversation(result.conversation_id);
+    }
+  };
+
+  const handleSearchKeyDown = (event) => {
+    if (!historySearchQuery.trim()) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveSearchResultIndex((current) => Math.min(filteredSearchResults.length - 1, current + 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveSearchResultIndex((current) => Math.max(0, current - 1));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      openSearchResult(activeSearchResult);
+    } else if (event.key === 'Escape') {
+      setHistorySearchQuery('');
+    }
   };
 
   const toggleGroupCollapsed = (label) => {
@@ -102,8 +292,42 @@ export default function Sidebar({
     });
   };
 
+
+  const handleResizePointerDown = (event) => {
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const handle = event.currentTarget;
+    const startX = event.clientX;
+    const startWidth = width;
+
+    setIsResizing(true);
+    handle.setPointerCapture?.(pointerId);
+    document.body.classList.add('sidebar-resizing');
+
+    const handlePointerMove = (moveEvent) => {
+      const nextWidth = Math.min(maxWidth, Math.max(minWidth, startWidth + moveEvent.clientX - startX));
+      onResize?.(nextWidth);
+    };
+
+    const stopResize = () => {
+      setIsResizing(false);
+      document.body.classList.remove('sidebar-resizing');
+      handle.releasePointerCapture?.(pointerId);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResize);
+      window.removeEventListener('pointercancel', stopResize);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+    window.addEventListener('pointercancel', stopResize);
+  };
+
   return (
-    <div className="sidebar">
+    <div
+      className={`sidebar ${isResizing ? 'resizing' : ''}`}
+      style={{ '--sidebar-width': `${width}px` }}
+    >
       <div className="sidebar-header">
         <div className="sidebar-title-row">
           <h1>LLM Council</h1>
@@ -123,11 +347,114 @@ export default function Sidebar({
         <button className="settings-btn" onClick={onOpenSettings}>
           LLM Settings
         </button>
+        <div className="conversation-filter-bar" aria-label="Conversation filters">
+          <button
+            type="button"
+            className={viewMode === 'active' ? 'active' : ''}
+            onClick={() => setViewMode('active')}
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            className={viewMode === 'archived' ? 'active' : ''}
+            onClick={() => setViewMode('archived')}
+          >
+            Archived
+          </button>
+          <button
+            type="button"
+            className={favoriteOnly ? 'active' : ''}
+            onClick={() => setFavoriteOnly((current) => !current)}
+            title="Show favorites only"
+          >
+            ★
+          </button>
+        </div>
+        {allTags.length > 0 && (
+          <select
+            className="conversation-tag-filter"
+            value={tagFilter}
+            onChange={(event) => setTagFilter(event.target.value)}
+            aria-label="Filter conversations by tag"
+          >
+            <option value="">All tags</option>
+            {allTags.map((tag) => (
+              <option value={tag} key={tag}>{tag}</option>
+            ))}
+          </select>
+        )}
+        <div className="sidebar-search" role="search">
+          <input
+            type="search"
+            value={historySearchQuery}
+            onChange={(event) => setHistorySearchQuery(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search conversations"
+            aria-label="Search conversation history"
+          />
+          {historySearchQuery && (
+            <button
+              type="button"
+              onClick={() => setHistorySearchQuery('')}
+              aria-label="Clear conversation search"
+            >
+              ×
+            </button>
+          )}
+        </div>
+        {historySearchQuery.trim() && (
+          <select
+            className="sidebar-search-filter"
+            value={historySearchSource}
+            onChange={(event) => setHistorySearchSource(event.target.value)}
+            aria-label="Filter search result source"
+          >
+            <option value="all">All sources</option>
+            <option value="title">Titles</option>
+            <option value="message">Messages</option>
+            <option value="user">User messages</option>
+            <option value="assistant">Assistant answers</option>
+            <option value="memory">Memory</option>
+          </select>
+        )}
       </div>
 
       <div className="conversation-list">
-        {conversations.length === 0 ? (
-          <div className="no-conversations">No conversations yet</div>
+        {historySearchQuery.trim() ? (
+          <div className="sidebar-search-results">
+            <div className="sidebar-search-status">
+              {historySearchLoading
+                ? 'Searching...'
+                : historySearchError || `${filteredSearchResults.length} result${filteredSearchResults.length === 1 ? '' : 's'} in current filters`}
+            </div>
+            {!historySearchLoading && filteredSearchResults.length === 0 && (
+              <div className="no-conversations">No matching results</div>
+            )}
+            {filteredSearchResults.map((result, index) => (
+              <button
+                type="button"
+                className={`sidebar-search-result ${index === activeSearchResultIndex ? 'active' : ''}`}
+                key={`${result.conversation_id}-${result.source}-${result.message_index ?? 'meta'}-${index}`}
+                onMouseEnter={() => setActiveSearchResultIndex(index)}
+                onClick={() => openSearchResult(result)}
+              >
+                <span className="sidebar-search-result-title">
+                  <HighlightedText text={result.conversation_title || 'New Conversation'} query={historySearchQuery} />
+                </span>
+                <span className="sidebar-search-result-meta">
+                  {searchSourceLabel(result)}
+                </span>
+                <span className="sidebar-search-result-excerpt">
+                  <HighlightedText text={result.excerpt || result.content || 'Matched conversation'} query={historySearchQuery} />
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : visibleConversations.length === 0 ? (
+          <div className="no-conversations">
+            {viewMode === 'archived' ? 'No archived conversations' : 'No conversations yet'}
+          </div>
         ) : (
           conversationGroups.map((group) => {
             const isActiveGroup = group.label === activeGroupLabel;
@@ -150,84 +477,148 @@ export default function Sidebar({
                   <span className="conversation-group-count">{group.conversations.length}</span>
                 </button>
                 {!isCollapsed && group.conversations.map((conv) => (
-                <div
-                  key={conv.id}
-                  className={`conversation-item ${
-                    conv.id === currentConversationId ? 'active' : ''
-                  }`}
-                  onClick={() => editingId === conv.id ? null : onSelectConversation(conv.id)}
-                >
-                  {editingId === conv.id ? (
-                    // Inline edit form
-                    <div className="conversation-title-edit" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="text"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        onKeyDown={(e) => handleKeyDown(e, conv.id)}
-                        className="title-input"
-                        autoFocus
-                        maxLength={100}
-                      />
-                      <div className="title-edit-actions">
-                        <button
-                          className="title-save-btn"
-                          onClick={() => handleSaveEdit(conv.id)}
-                          title="Save (Enter)"
-                        >
-                          ✓
-                        </button>
-                        <button
-                          className="title-cancel-btn"
-                          onClick={handleCancelEdit}
-                          title="Cancel (Esc)"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    // Display mode with action buttons
-                    <>
-                      <div className="conversation-title-row">
-                        <div className="conversation-title">
-                          {conv.title || 'New Conversation'}
-                        </div>
-                        <div className="conversation-actions">
-                          <button
-                            className="title-edit-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleStartEdit(conv);
-                            }}
-                            title="Edit title"
-                          >
-                            ✏️
+                  <div
+                    key={conv.id}
+                    className={`conversation-item ${conv.id === currentConversationId ? 'active' : ''} ${conv.pinned ? 'pinned' : ''}`.trim()}
+                    onClick={() => editingId === conv.id || tagEditingId === conv.id ? null : onSelectConversation(conv.id)}
+                  >
+                    {editingId === conv.id ? (
+                      <div className="conversation-title-edit" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="text"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onKeyDown={(e) => handleKeyDown(e, conv.id)}
+                          className="title-input"
+                          autoFocus
+                          maxLength={100}
+                        />
+                        <div className="title-edit-actions">
+                          <button className="title-save-btn" onClick={() => handleSaveEdit(conv.id)} title="Save (Enter)">
+                            ✓
                           </button>
-                          <button
-                            className="conversation-delete-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteConversation(conv.id);
-                            }}
-                            title="Delete conversation"
-                          >
-                            🗑️
+                          <button className="title-cancel-btn" onClick={handleCancelEdit} title="Cancel (Esc)">
+                            ✕
                           </button>
                         </div>
                       </div>
-                      <div className="conversation-meta">
-                        {conv.message_count} messages
+                    ) : tagEditingId === conv.id ? (
+                      <div className="conversation-title-edit" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="text"
+                          value={tagInput}
+                          onChange={(e) => setTagInput(e.target.value)}
+                          onKeyDown={(e) => handleTagKeyDown(e, conv.id)}
+                          className="title-input"
+                          autoFocus
+                          placeholder="tag-a, tag-b"
+                          maxLength={240}
+                        />
+                        <div className="title-edit-actions">
+                          <button className="title-save-btn" onClick={() => handleSaveTags(conv.id)} title="Save tags">
+                            ✓
+                          </button>
+                          <button className="title-cancel-btn" onClick={() => setTagEditingId(null)} title="Cancel">
+                            ✕
+                          </button>
+                        </div>
                       </div>
-                    </>
-                  )}
-                </div>
+                    ) : (
+                      <>
+                        <div className="conversation-title-row">
+                          <div className="conversation-title">
+                            {conv.title || 'New Conversation'}
+                          </div>
+                          <div className="conversation-actions">
+                            <button
+                              className={`conversation-action-btn ${conv.favorite ? 'active' : ''}`}
+                              onClick={(e) => handleMetadataClick(e, conv, { favorite: !conv.favorite })}
+                              title={conv.favorite ? 'Remove favorite' : 'Favorite conversation'}
+                            >
+                              ★
+                            </button>
+                            <button
+                              className={`conversation-action-btn ${conv.pinned ? 'active' : ''}`}
+                              onClick={(e) => handleMetadataClick(e, conv, { pinned: !conv.pinned })}
+                              title={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
+                            >
+                              ⬆
+                            </button>
+                            <button
+                              className="title-edit-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartEdit(conv);
+                              }}
+                              title="Edit title"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              className="conversation-delete-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteConversation(conv.id);
+                              }}
+                              title="Delete conversation"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                        <div className="conversation-meta-row">
+                          <span className="conversation-meta">{conv.message_count} messages</span>
+                          <button
+                            type="button"
+                            className="conversation-archive-btn"
+                            onClick={(e) => handleMetadataClick(e, conv, { archived: !conv.archived })}
+                          >
+                            {conv.archived ? 'Restore' : 'Archive'}
+                          </button>
+                        </div>
+                        <div className="conversation-tags">
+                          {(conv.tags || []).map((tag) => (
+                            <button
+                              type="button"
+                              className="conversation-tag"
+                              key={tag}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTagFilter(tag);
+                              }}
+                              title={`Filter by ${tag}`}
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className="conversation-tag add"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartTagEdit(conv);
+                            }}
+                          >
+                            Tags
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 ))}
               </section>
             );
           })
         )}
       </div>
+      <button
+        type="button"
+        className="sidebar-resize-handle"
+        onPointerDown={handleResizePointerDown}
+        aria-label="Resize sidebar"
+        title="Drag to resize sidebar"
+      />
     </div>
   );
 }
+

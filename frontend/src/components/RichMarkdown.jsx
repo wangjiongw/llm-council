@@ -40,11 +40,24 @@ const HIGHLIGHT_LANGUAGES = new Set([
 ]);
 
 const MAX_HIGHLIGHT_CHARS = 80000;
+const LONG_CODE_LINES = 120;
+const COLLAPSED_CODE_LINES = 80;
 
 let katexPromise;
 let highlightPromise;
 let mermaidPromise;
 let mermaidRenderCounter = 0;
+const highlightCache = new Map();
+const katexCache = new Map();
+const mermaidCache = new Map();
+
+function remember(cache, key, value, maxEntries = 80) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > maxEntries) {
+    cache.delete(cache.keys().next().value);
+  }
+}
 
 function loadKatex() {
   if (!katexPromise) {
@@ -185,6 +198,7 @@ function escapeHtml(value) {
 function useHighlightedCode(code, language, mode, enabled = true) {
   const fallback = useMemo(() => escapeHtml(code), [code]);
   const cacheKey = useMemo(() => `${mode}:${language}:${code}`, [code, language, mode]);
+  const cached = highlightCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -202,7 +216,9 @@ function useHighlightedCode(code, language, mode, enabled = true) {
       .then((hljs) => {
         if (cancelled) return;
         const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
-        setResult({ cacheKey, html: highlighted, state: 'highlighted' });
+        const nextResult = { cacheKey, html: highlighted, state: 'highlighted' };
+        remember(highlightCache, cacheKey, nextResult);
+        setResult(nextResult);
       })
       .catch(() => {
         if (!cancelled) setResult({ cacheKey, html: fallback, state: 'plain' });
@@ -217,6 +233,7 @@ function useHighlightedCode(code, language, mode, enabled = true) {
     return { html: fallback, state: 'plain' };
   }
   if (code.length > MAX_HIGHLIGHT_CHARS) return { html: fallback, state: 'large' };
+  if (cached) return cached;
   if (result?.cacheKey === cacheKey) return result;
   return { html: fallback, state: 'loading' };
 }
@@ -225,30 +242,53 @@ function CodeBlock({ className, children, mode }) {
   const code = String(children || '').replace(/\n$/, '');
   const language = normalizeLanguage(className);
   const { html, state } = useHighlightedCode(code, language, mode, language !== 'mermaid');
+  const lineCount = Math.max(1, code.split('\n').length);
+  const isLongCode = mode === 'full' && lineCount > LONG_CODE_LINES;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const isCollapsed = isLongCode && !isExpanded;
+  const visibleLineCount = isCollapsed ? Math.min(COLLAPSED_CODE_LINES, lineCount) : lineCount;
+  const lineNumbers = Array.from({ length: visibleLineCount }, (_, index) => index + 1);
 
   if (language === 'mermaid') {
     return <MermaidBlock code={code} mode={mode} />;
   }
 
   return (
-    <div className={`rich-code-block ${state === 'plain' ? 'plain-code' : ''}`.trim()}>
+    <div className={`rich-code-block ${state === 'plain' ? 'plain-code' : ''} ${isCollapsed ? 'collapsed-code' : ''}`.trim()}>
       <div className="rich-code-header">
         <span>{language}</span>
         <div className="rich-header-actions">
           {state === 'loading' && <span className="rich-runtime-status">highlighting</span>}
           {state === 'large' && <span className="rich-runtime-status">plain large block</span>}
+          {lineCount > 1 && <span className="rich-runtime-status">{lineCount} lines</span>}
           <CopyControl content={code} label="Copy code" />
         </div>
       </div>
       <pre className={`rich-code language-${language}`}>
-        <code dangerouslySetInnerHTML={{ __html: html }} />
+        <code className="rich-code-with-lines">
+          <span className="rich-code-line-numbers" aria-hidden="true">
+            {lineNumbers.map((lineNumber) => (
+              <span key={lineNumber}>{lineNumber}</span>
+            ))}
+          </span>
+          <span className="rich-code-content" dangerouslySetInnerHTML={{ __html: html || '&nbsp;' }} />
+        </code>
       </pre>
+      {isLongCode && (
+        <div className="rich-code-footer">
+          <button type="button" onClick={() => setIsExpanded((expanded) => !expanded)}>
+            {isExpanded ? 'Collapse code' : `Show all ${lineCount} lines`}
+          </button>
+          {isCollapsed && <span>Showing first {Math.min(COLLAPSED_CODE_LINES, lineCount)} lines</span>}
+        </div>
+      )}
     </div>
   );
 }
 
 function useMermaidSvg(code, mode) {
   const cacheKey = useMemo(() => `${mode}:${code}`, [code, mode]);
+  const cached = mermaidCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -263,7 +303,11 @@ function useMermaidSvg(code, mode) {
         return mermaid.render(renderId, code);
       })
       .then((rendered) => {
-        if (!cancelled) setResult({ cacheKey, svg: rendered.svg || '', error: '' });
+        if (!cancelled) {
+          const nextResult = { cacheKey, svg: rendered.svg || '', error: '' };
+          remember(mermaidCache, cacheKey, nextResult, 40);
+          setResult(nextResult);
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -281,6 +325,7 @@ function useMermaidSvg(code, mode) {
   }, [cacheKey, code, mode]);
 
   if (mode !== 'full') return { svg: '', error: '', state: 'deferred' };
+  if (cached) return { ...cached, state: cached.error ? 'error' : 'ready' };
   if (result?.cacheKey === cacheKey) return { ...result, state: result.error ? 'error' : 'ready' };
   return { svg: '', error: '', state: 'loading' };
 }
@@ -318,6 +363,7 @@ function MermaidBlock({ code, mode }) {
 
 function useKatexHtml(expression, displayMode, mode) {
   const cacheKey = useMemo(() => `${mode}:${displayMode}:${expression}`, [displayMode, expression, mode]);
+  const cached = katexCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -329,10 +375,12 @@ function useKatexHtml(expression, displayMode, mode) {
     loadKatex()
       .then((katex) => {
         if (cancelled) return;
-        setResult({
+        const nextResult = {
           cacheKey,
           html: katex.renderToString(expression, { throwOnError: false, displayMode }),
-        });
+        };
+        remember(katexCache, cacheKey, nextResult, 160);
+        setResult(nextResult);
       })
       .catch(() => {
         if (!cancelled) setResult({ cacheKey, html: '' });
@@ -344,6 +392,7 @@ function useKatexHtml(expression, displayMode, mode) {
   }, [cacheKey, displayMode, expression, mode]);
 
   if (mode !== 'full') return '';
+  if (cached) return cached.html;
   return result?.cacheKey === cacheKey ? result.html : '';
 }
 
@@ -517,39 +566,77 @@ function splitBlockMath(content) {
   return segments.length ? segments : [{ type: 'markdown', value: source }];
 }
 
+function useDeferredFullMode(requestedMode) {
+  const rootRef = useRef(null);
+  const [hasEnteredViewport, setHasEnteredViewport] = useState(
+    () => typeof IntersectionObserver === 'undefined'
+  );
+
+  useEffect(() => {
+    if (requestedMode !== 'full' || hasEnteredViewport) {
+      return undefined;
+    }
+
+    const node = rootRef.current;
+    if (!node) {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setHasEnteredViewport(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '640px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasEnteredViewport, requestedMode]);
+
+  const effectiveMode = requestedMode === 'full' && !hasEnteredViewport ? 'compact' : requestedMode;
+  return [rootRef, effectiveMode];
+}
+
 function RichMarkdown({ content, mode = 'full', className = '' }) {
-  const source = mode === 'compact' ? compactContent(content) : String(content || '');
-  const segments = mode === 'compact' ? [{ type: 'markdown', value: source }] : splitBlockMath(source);
-  const components = {
+  const [rootRef, effectiveMode] = useDeferredFullMode(mode);
+  const source = effectiveMode === 'compact' ? compactContent(content) : String(content || '');
+  const segments = useMemo(
+    () => (effectiveMode === 'compact' ? [{ type: 'markdown', value: source }] : splitBlockMath(source)),
+    [effectiveMode, source]
+  );
+  const components = useMemo(() => ({
     code({ inline, className: codeClassName, children }) {
       if (inline) {
         return <code className={codeClassName}>{children}</code>;
       }
-      return <CodeBlock className={codeClassName} mode={mode}>{children}</CodeBlock>;
+      return <CodeBlock className={codeClassName} mode={effectiveMode}>{children}</CodeBlock>;
     },
     table({ children }) {
       return <MarkdownTable>{children}</MarkdownTable>;
     },
     p(props) {
-      return <InlineMathContainer as="p" mode={mode} {...props} />;
+      return <InlineMathContainer as="p" mode={effectiveMode} {...props} />;
     },
     li(props) {
-      return <InlineMathContainer as="li" mode={mode} {...props} />;
+      return <InlineMathContainer as="li" mode={effectiveMode} {...props} />;
     },
     td(props) {
-      return <InlineMathContainer as="td" mode={mode} {...props} />;
+      return <InlineMathContainer as="td" mode={effectiveMode} {...props} />;
     },
     th(props) {
-      return <InlineMathContainer as="th" mode={mode} {...props} />;
+      return <InlineMathContainer as="th" mode={effectiveMode} {...props} />;
     },
     img: ImageRenderer,
-  };
+  }), [effectiveMode]);
+  const deferredClass = mode === 'full' && effectiveMode !== 'full' ? 'rich-markdown-deferred' : '';
 
   return (
-    <div className={`markdown-content rich-markdown rich-markdown-${mode} ${className}`.trim()}>
+    <div ref={rootRef} className={`markdown-content rich-markdown rich-markdown-${effectiveMode} ${deferredClass} ${className}`.trim()}>
       {segments.map((segment, index) => (
         segment.type === 'math' ? (
-          <MathBlock expression={segment.value} mode={mode} key={`${segment.type}-${index}`} />
+          <MathBlock expression={segment.value} mode={effectiveMode} key={`${segment.type}-${index}`} />
         ) : (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} key={`${segment.type}-${index}`}>
             {segment.value}

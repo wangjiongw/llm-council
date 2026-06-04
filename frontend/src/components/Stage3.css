@@ -200,3 +200,9 @@
     max-width: 100%;
   }
 }
+
+
+.final-text-shell:not(.collapsed) {
+  max-height: none;
+  overflow: visible;
+}
