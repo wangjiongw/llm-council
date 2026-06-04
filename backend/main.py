@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any
 import uuid
 import json
@@ -98,9 +98,13 @@ class ContextMemoryRequest(BaseModel):
     enabled: bool | None = None
 
 
-class UpdateTitleRequest(BaseModel):
-    """Request to update conversation title."""
-    title: str
+class UpdateConversationRequest(BaseModel):
+    """Partial update for list-view conversation metadata."""
+    title: str | None = None
+    favorite: bool | None = None
+    archived: bool | None = None
+    pinned: bool | None = None
+    tags: List[str] | None = None
 
 
 class UpdateFileQueueRequest(BaseModel):
@@ -132,15 +136,25 @@ class ConversationMetadata(BaseModel):
     """Conversation metadata for list view."""
     id: str
     created_at: str
+    updated_at: str | None = None
     title: str
     message_count: int
+    favorite: bool = False
+    archived: bool = False
+    pinned: bool = False
+    tags: List[str] = Field(default_factory=list)
 
 
 class Conversation(BaseModel):
     """Full conversation with all messages."""
     id: str
     created_at: str
+    updated_at: str | None = None
     title: str
+    favorite: bool = False
+    archived: bool = False
+    pinned: bool = False
+    tags: List[str] = Field(default_factory=list)
     messages: List[Dict[str, Any]]
     turns: List[Dict[str, Any]] | None = None
     context_summary: Dict[str, Any] | None = None
@@ -1009,38 +1023,33 @@ async def search_conversation_history(q: str = "", limit: int = 20):
 
 
 @app.patch("/api/conversations/{conversation_id}", response_model=Conversation)
-async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest):
-    """
-    Update the title of a conversation.
+async def update_conversation(conversation_id: str, request: UpdateConversationRequest):
+    """Update title, favorite, archive, pin, or tags for one conversation."""
+    updates = request.model_dump(exclude_unset=True)
 
-    Args:
-        conversation_id: Conversation identifier
-        request: Request body containing new title
+    if not updates:
+        raise HTTPException(status_code=400, detail="No conversation updates provided")
 
-    Request body:
-        {
-            "title": "New Title"
-        }
-    """
-    new_title = request.title.strip()
+    if "title" in updates:
+        new_title = str(updates.get("title") or "").strip()
+        if not new_title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        if len(new_title) > 100:
+            raise HTTPException(status_code=400, detail="Title too long (max 100 characters)")
+        updates["title"] = new_title
 
-    if not new_title:
-        raise HTTPException(status_code=400, detail="Title cannot be empty")
-
-    if len(new_title) > 100:
-        raise HTTPException(status_code=400, detail="Title too long (max 100 characters)")
+    if "tags" in updates:
+        if updates["tags"] is None:
+            updates["tags"] = []
+        if not isinstance(updates["tags"], list):
+            raise HTTPException(status_code=400, detail="Tags must be a list")
 
     try:
-        # Update title using storage function
-        storage.update_conversation_title(conversation_id, new_title)
-
-        # Return updated conversation
-        conversation = storage.get_conversation(conversation_id)
-        return conversation
+        return storage.update_conversation_metadata(conversation_id, updates)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update title: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update conversation: {str(e)}")
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)

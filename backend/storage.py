@@ -153,6 +153,63 @@ def get_conversation_path(conversation_id: str) -> str:
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
+MAX_CONVERSATION_TAGS = 20
+MAX_CONVERSATION_TAG_LENGTH = 32
+
+
+def _normalize_conversation_tags(tags: Any) -> List[str]:
+    if not isinstance(tags, list):
+        return []
+
+    normalized = []
+    seen = set()
+    for tag in tags:
+        clean_tag = str(tag or "").strip()
+        if not clean_tag:
+            continue
+        clean_tag = " ".join(clean_tag.split())[:MAX_CONVERSATION_TAG_LENGTH]
+        key = clean_tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(clean_tag)
+        if len(normalized) >= MAX_CONVERSATION_TAGS:
+            break
+    return normalized
+
+
+def _touch_conversation(conversation: Dict[str, Any], when: Optional[str] = None) -> str:
+    timestamp = when or datetime.utcnow().isoformat()
+    conversation["updated_at"] = timestamp
+    return timestamp
+
+
+def _ensure_conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
+    if not conversation.get("created_at"):
+        conversation["created_at"] = datetime.utcnow().isoformat()
+    conversation["updated_at"] = str(conversation.get("updated_at") or conversation.get("created_at"))
+    conversation["favorite"] = bool(conversation.get("favorite", False))
+    conversation["archived"] = bool(conversation.get("archived", False))
+    conversation["pinned"] = bool(conversation.get("pinned", False))
+    conversation["tags"] = _normalize_conversation_tags(conversation.get("tags"))
+    return conversation
+
+
+def _conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _ensure_conversation_metadata(dict(conversation))
+    return {
+        "id": normalized["id"],
+        "created_at": normalized["created_at"],
+        "updated_at": normalized["updated_at"],
+        "title": normalized.get("title", "New Conversation"),
+        "message_count": len(normalized.get("messages") or []),
+        "favorite": normalized["favorite"],
+        "archived": normalized["archived"],
+        "pinned": normalized["pinned"],
+        "tags": normalized["tags"],
+    }
+
+
 def create_conversation(conversation_id: str) -> Dict[str, Any]:
     """
     Create a new conversation.
@@ -166,10 +223,16 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
     with _conversation_lock(conversation_id):
         ensure_data_dir()
 
+        now = datetime.utcnow().isoformat()
         conversation = {
             "id": conversation_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": now,
+            "updated_at": now,
             "title": "New Conversation",
+            "favorite": False,
+            "archived": False,
+            "pinned": False,
+            "tags": [],
             "messages": [],
             "turns": [],
             "context_summary": _empty_summary_state(),
@@ -212,6 +275,7 @@ def save_conversation(conversation: Dict[str, Any]):
 
     conversation_id = conversation['id']
     with _conversation_lock(conversation_id):
+        _ensure_conversation_metadata(conversation)
         path = get_conversation_path(conversation_id)
         _write_json_atomic(path, conversation)
 
@@ -233,16 +297,15 @@ def list_conversations() -> List[Dict[str, Any]]:
                 data = json.load(f)
                 if "id" not in data or "messages" not in data:
                     continue
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
+                conversations.append(_conversation_metadata(data))
 
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
+    conversations.sort(
+        key=lambda item: (
+            bool(item.get("pinned")),
+            item.get("updated_at") or item.get("created_at") or "",
+        ),
+        reverse=True,
+    )
 
     return conversations
 
@@ -394,6 +457,7 @@ def add_user_message(
 
         conversation["messages"].append(message)
         message_index = len(conversation["messages"]) - 1
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return message_index
 
@@ -417,6 +481,7 @@ def update_user_message_content(
             raise ValueError("Selected message is not a user message")
 
         messages[message_index]["content"] = content
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return conversation
 
@@ -461,6 +526,7 @@ def add_assistant_message(
         conversation["messages"].append(message)
         message_index = len(conversation["messages"]) - 1
 
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return message_index
 
@@ -498,6 +564,7 @@ def create_assistant_partial(conversation_id: str) -> int:
         }
         conversation["messages"].append(message)
         message_index = len(conversation["messages"]) - 1
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return message_index
 
@@ -554,6 +621,7 @@ def truncate_conversation_messages(conversation_id: str, from_message_index: int
         # Any cached summary can include text from the removed suffix or have stale
         # covered-message counts, so force the next context build to recompute it.
         conversation["context_summary"] = _empty_summary_state()
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return conversation
 
@@ -596,10 +664,16 @@ def fork_conversation(
                 message.pop("turn_id", None)
 
         branch_id = new_conversation_id or str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
         branch = {
             "id": branch_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": now,
+            "updated_at": now,
             "title": f"{conversation.get('title', 'New Conversation')} (branch)",
+            "favorite": False,
+            "archived": False,
+            "pinned": False,
+            "tags": _normalize_conversation_tags(conversation.get("tags")),
             "messages": branch_messages,
             "turns": kept_turns,
             "context_summary": _empty_summary_state(),
@@ -607,7 +681,7 @@ def fork_conversation(
             "context_memory": copy.deepcopy(conversation.get("context_memory") or []),
             "branch_parent_id": conversation_id,
             "branch_from_message_index": through_message_index,
-            "branch_created_at": datetime.utcnow().isoformat(),
+            "branch_created_at": now,
         }
         _rewrite_attachment_refs_for_branch(branch, conversation_id, branch_id)
 
@@ -645,6 +719,7 @@ def update_context_policy(conversation_id: str, updates: Dict[str, Any]) -> Dict
                 merged[key] = updates[key]
         policy = normalize_context_policy(merged)
         conversation["context_policy"] = policy
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return policy
 
@@ -711,6 +786,7 @@ def add_context_memory(conversation_id: str, content: str, enabled: bool = True)
         }
         memory.append(entry)
         conversation["context_memory"] = memory
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return entry
 
@@ -734,6 +810,7 @@ def update_context_memory(conversation_id: str, memory_id: str, updates: Dict[st
                 entry["enabled"] = bool(updates["enabled"])
             entry["updated_at"] = datetime.utcnow().isoformat()
             conversation["context_memory"] = memory
+            _touch_conversation(conversation)
             save_conversation(conversation)
             return entry
 
@@ -751,6 +828,7 @@ def delete_context_memory(conversation_id: str, memory_id: str) -> Dict[str, Any
         if len(next_memory) == len(memory):
             raise ValueError(f"Memory {memory_id} not found")
         conversation["context_memory"] = next_memory
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return {"deleted": True, "memory_id": memory_id}
 
@@ -773,6 +851,7 @@ def set_message_pinned(conversation_id: str, message_index: int, pinned: bool) -
         else:
             message.pop("pinned_at", None)
 
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return conversation
 
@@ -798,6 +877,7 @@ def set_message_context_excluded(conversation_id: str, message_index: int, exclu
         # The cached summary may contain a message that the user just excluded,
         # so force the next build to summarize from the active message set.
         conversation["context_summary"] = _empty_summary_state()
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return conversation
 
@@ -842,6 +922,7 @@ def update_assistant_partial(
                 message[key] = value
 
         message["updated_at"] = datetime.utcnow().isoformat()
+        _touch_conversation(conversation)
         save_conversation(conversation)
         return message
 
@@ -954,6 +1035,7 @@ def create_turn_record(
         messages[user_message_index]["turn_id"] = turn_id
         messages[assistant_message_index]["turn_id"] = turn_id
         conversation.setdefault("turns", []).append(turn)
+        _touch_conversation(conversation, now)
         save_conversation(conversation)
         return turn
 
@@ -983,6 +1065,7 @@ def update_turn_record(
                 if runs is not None:
                     turn["runs"] = runs
                 turn["updated_at"] = datetime.utcnow().isoformat()
+                _touch_conversation(conversation)
                 save_conversation(conversation)
                 return turn
 
@@ -1036,6 +1119,29 @@ def get_context_audit(conversation_id: str) -> Dict[str, Any]:
     }
 
 
+def update_conversation_metadata(conversation_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Update list-view metadata for a conversation."""
+    allowed_keys = {"title", "favorite", "archived", "pinned", "tags"}
+    with _conversation_lock(conversation_id):
+        conversation = get_conversation(conversation_id)
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
+        for key, value in updates.items():
+            if key not in allowed_keys or value is None:
+                continue
+            if key == "title":
+                conversation["title"] = str(value).strip()
+            elif key == "tags":
+                conversation["tags"] = _normalize_conversation_tags(value)
+            else:
+                conversation[key] = bool(value)
+
+        _touch_conversation(conversation)
+        save_conversation(conversation)
+        return conversation
+
+
 def update_conversation_title(conversation_id: str, title: str):
     """
     Update the title of a conversation.
@@ -1044,13 +1150,7 @@ def update_conversation_title(conversation_id: str, title: str):
         conversation_id: Conversation identifier
         title: New title for the conversation
     """
-    with _conversation_lock(conversation_id):
-        conversation = get_conversation(conversation_id)
-        if conversation is None:
-            raise ValueError(f"Conversation {conversation_id} not found")
-
-        conversation["title"] = title
-        save_conversation(conversation)
+    update_conversation_metadata(conversation_id, {"title": title})
 
 
 def get_conversation_history(
