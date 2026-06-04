@@ -66,36 +66,8 @@ reload_nginx() {
 }
 
 start_backend_without_systemd() {
-  mkdir -p "$PROJECT_DIR/.run" "$PROJECT_DIR/logs"
-
-  local pid_file="$PROJECT_DIR/.run/llm-council-backend.pid"
-  if [[ -f "$pid_file" ]]; then
-    local old_pid
-    old_pid="$(cat "$pid_file")"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-      kill "$old_pid"
-      sleep 1
-    fi
-  fi
-
-  set -a
-  # shellcheck disable=SC1091
-  source "$PROJECT_DIR/.env"
-  set +a
-
-  export BACKEND_HOST
-  export BACKEND_PORT
-  BACKEND_HOST="$(strip_outer_quotes "${BACKEND_HOST:-127.0.0.1}")"
-  BACKEND_PORT="$(strip_outer_quotes "${BACKEND_PORT:-8001}")"
-  validate_port BACKEND_PORT "$BACKEND_PORT"
-
-  if [[ "${BACKEND_USE_PROXY:-1}" == "0" || "${BACKEND_USE_PROXY:-}" == "false" ]]; then
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
-  fi
-
-  cd "$PROJECT_DIR"
-  nohup "$UV_BIN" run python -m backend.main >> "$PROJECT_DIR/logs/backend.log" 2>&1 &
-  echo "$!" > "$pid_file"
+  "$PROJECT_DIR/deploy/native/stop-backend.sh" >/dev/null 2>&1 || true
+  "$PROJECT_DIR/deploy/native/start-backend.sh"
 }
 
 require_command nginx "Install it first, for example: sudo apt-get install nginx"

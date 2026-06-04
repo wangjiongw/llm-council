@@ -23,6 +23,15 @@ fi
 PID="$(cat "$PID_FILE")"
 if [[ -n "$PID" ]] && kill -0 "$PID" >/dev/null 2>&1; then
   kill "$PID"
+  for _ in 1 2 3 4 5; do
+    if ! kill -0 "$PID" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  if kill -0 "$PID" >/dev/null 2>&1; then
+    kill -9 "$PID" >/dev/null 2>&1 || true
+  fi
   echo "Stopped backend process $PID"
 else
   echo "Backend process $PID is not running"
