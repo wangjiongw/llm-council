@@ -92,7 +92,7 @@ class FileUploadApiTest(unittest.TestCase):
         with (
             patch("backend.main.run_full_council_with_history", new=council_mock),
             patch(
-                "backend.main.generate_conversation_title",
+                "backend.main.generate_initial_title",
                 new=AsyncMock(return_value="Uploaded notes"),
             ),
         ):
@@ -117,7 +117,7 @@ class FileUploadApiTest(unittest.TestCase):
             patch("backend.main.quick_query", new=quick_mock),
             patch("backend.main.run_full_council_with_history", new=council_mock),
             patch(
-                "backend.main.generate_conversation_title",
+                "backend.main.generate_initial_title",
                 new=AsyncMock(return_value="Quick upload"),
             ),
         ):
@@ -167,7 +167,7 @@ class FileUploadApiTest(unittest.TestCase):
 
         with (
             patch("backend.main.quick_query", new=quick_mock),
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Image upload")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Image upload")),
         ):
             response = self.client.post(
                 "/api/conversations/conv-1/message/files",
@@ -247,7 +247,7 @@ class FileUploadApiTest(unittest.TestCase):
 
         with (
             patch("backend.main.quick_query", new=quick_mock),
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Image upload")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Image upload")),
         ):
             response = self.client.post(
                 "/api/conversations/conv-1/message/files",
@@ -289,7 +289,7 @@ class FileUploadApiTest(unittest.TestCase):
 
         with (
             patch("backend.main.quick_query", new=quick_mock),
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Image upload")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Image upload")),
         ):
             response = self.client.post(
                 "/api/conversations/conv-1/message/files",
@@ -327,7 +327,7 @@ class FileUploadApiTest(unittest.TestCase):
 
         with (
             patch("backend.main.quick_query", new=quick_mock),
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Long upload")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Long upload")),
         ):
             response = self.client.post(
                 "/api/conversations/conv-1/message/files",
@@ -398,7 +398,7 @@ class FileUploadApiTest(unittest.TestCase):
                 new=AsyncMock(return_value=([{"model": "a"}], [], {"response": "ok"}, {})),
             ),
             patch(
-                "backend.main.generate_conversation_title",
+                "backend.main.generate_initial_title",
                 new=AsyncMock(return_value="Uploaded image"),
             ),
         ):

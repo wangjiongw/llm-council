@@ -45,6 +45,45 @@ class ConversationMetadataAPITest(unittest.TestCase):
         stored = storage.get_conversation("conv-1")
         self.assertEqual(stored["tags"], ["planning", "api"])
 
+        self.assertEqual(data["title_source"], "manual")
+        self.assertFalse(data["title_locked"])
+        self.assertTrue(data["title_updated_at"])
+
+    def test_manual_title_locks_against_automatic_llm_updates(self):
+        response = self.client.patch(
+            "/api/conversations/conv-1",
+            json={"title": "Manual Research Title", "title_source": "manual", "title_locked": True},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["title"], "Manual Research Title")
+        self.assertEqual(data["title_source"], "manual")
+        self.assertTrue(data["title_locked"])
+        self.assertTrue(data["title_updated_at"])
+
+        skipped = storage.update_conversation_title(
+            "conv-1",
+            "Automatic LLM Title",
+            source="llm",
+            locked=False,
+            respect_lock=True,
+        )
+        self.assertEqual(skipped["title"], "Manual Research Title")
+        self.assertEqual(skipped["title_source"], "manual")
+        self.assertTrue(skipped["title_locked"])
+
+        applied = storage.update_conversation_title(
+            "conv-1",
+            "Explicit AI Title",
+            source="llm",
+            locked=False,
+            respect_lock=False,
+        )
+        self.assertEqual(applied["title"], "Explicit AI Title")
+        self.assertEqual(applied["title_source"], "llm")
+        self.assertFalse(applied["title_locked"])
+
     def test_list_includes_metadata_and_orders_pinned_first(self):
         self.client.patch("/api/conversations/conv-2", json={"title": "Later"})
         self.client.patch("/api/conversations/conv-1", json={"title": "Pinned", "pinned": True})
@@ -147,7 +186,7 @@ class ConversationMetadataAPITest(unittest.TestCase):
         self.assertIn("Design saved views", export_response.text)
         self.assertIn("Use filters", export_response.text)
 
-        with patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Conversation Views Design")) as mock_title:
+        with patch("backend.main.generate_conversation_title_from_context", new=AsyncMock(return_value="Conversation Views Design")) as mock_title:
             title_response = self.client.post("/api/conversations/conv-1/title-suggestions")
 
         self.assertEqual(title_response.status_code, 200)
@@ -165,7 +204,7 @@ class ConversationMetadataAPITest(unittest.TestCase):
         ]
         storage.save_conversation(conversation)
 
-        with patch("backend.main.generate_conversation_title", new=AsyncMock(side_effect=RuntimeError("provider unavailable"))):
+        with patch("backend.main.generate_conversation_title_from_context", new=AsyncMock(side_effect=RuntimeError("provider unavailable"))):
             response = self.client.post("/api/conversations/conv-1/title-suggestions")
 
         self.assertEqual(response.status_code, 200)

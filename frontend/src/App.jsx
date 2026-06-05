@@ -170,6 +170,9 @@ function App() {
     message_count: conversation.messages?.length ?? fallback.message_count ?? 0,
     turn_count: conversationTurnCount({ ...fallback, ...conversation }),
     title: conversation.title || fallback.title || 'New Conversation',
+    title_source: conversation.title_source || fallback.title_source || 'local',
+    title_locked: Boolean(conversation.title_locked ?? fallback.title_locked ?? false),
+    title_updated_at: conversation.title_updated_at || fallback.title_updated_at || null,
     favorite: Boolean(conversation.favorite),
     archived: Boolean(conversation.archived),
     pinned: Boolean(conversation.pinned),
@@ -205,8 +208,13 @@ function App() {
     }
   };
 
-  const handleUpdateTitle = async (conversationId, newTitle) => {
-    await handleUpdateConversationMetadata(conversationId, { title: newTitle });
+  const handleUpdateTitle = async (conversationId, newTitle, options = {}) => {
+    const source = options.source || 'manual';
+    await handleUpdateConversationMetadata(conversationId, {
+      title: newTitle,
+      title_source: source,
+      title_locked: options.locked ?? source === 'manual',
+    });
   };
 
   const handleBatchUpdateConversations = async (conversationIds, updates, tagMode = 'replace') => {
@@ -263,7 +271,10 @@ function App() {
 
   const handleSuggestConversationTitles = async (conversationId) => {
     const response = await api.suggestConversationTitles(conversationId);
-    return response.suggestions || [];
+    return {
+      suggestions: response.suggestions || [],
+      source: response.source || 'local',
+    };
   };
 
   const handleExportConversation = async (conversationId, format = 'markdown') => {

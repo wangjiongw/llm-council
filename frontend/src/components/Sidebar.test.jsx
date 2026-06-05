@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Sidebar from './Sidebar';
@@ -186,8 +186,71 @@ describe('Sidebar conversation management controls', () => {
 
     expect(onSuggestTitle).toHaveBeenCalledWith('conv-1');
     await waitFor(() => {
-      expect(onUpdateTitle).toHaveBeenCalledWith('conv-1', 'Context Architecture');
+      expect(onUpdateTitle).toHaveBeenCalledWith('conv-1', 'Context Architecture', { source: 'local', locked: false });
     });
     expect(await screen.findByRole('button', { name: 'Context Architecture' })).toBeInTheDocument();
   });
+
+  it('shows a status when generated titles match the current title', async () => {
+    const onSuggestTitle = vi.fn(async () => ({ suggestions: ['Architecture Notes'], source: 'local' }));
+    const onUpdateTitle = vi.fn(async () => {});
+    const user = userEvent.setup();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onSuggestTitle={onSuggestTitle}
+        onUpdateTitle={onUpdateTitle}
+      />
+    );
+
+    await user.click(screen.getAllByTitle('Auto title with LLM')[0]);
+
+    expect(onSuggestTitle).toHaveBeenCalledWith('conv-1');
+    await waitFor(() => expect(screen.getByText('No better title found')).toBeInTheDocument());
+    expect(onUpdateTitle).not.toHaveBeenCalled();
+  });
+
+  it('shows a dismissible status when title generation fails', async () => {
+    const onSuggestTitle = vi.fn(async () => {
+      throw new Error('provider unavailable');
+    });
+    const onUpdateTitle = vi.fn(async () => {});
+    const user = userEvent.setup();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onSuggestTitle={onSuggestTitle}
+        onUpdateTitle={onUpdateTitle}
+      />
+    );
+
+    await user.click(screen.getAllByTitle('Auto title with LLM')[0]);
+
+    await waitFor(() => expect(screen.getByText('Title generation failed')).toBeInTheDocument());
+    expect(onUpdateTitle).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss title status' }));
+    expect(screen.queryByText('Title generation failed')).not.toBeInTheDocument();
+  });
+
+  it('auto-dismisses completed title statuses', async () => {
+    const onSuggestTitle = vi.fn(async () => ({ suggestions: ['Architecture Notes'], source: 'local' }));
+    const onUpdateTitle = vi.fn(async () => {});
+    const user = userEvent.setup();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onSuggestTitle={onSuggestTitle}
+        onUpdateTitle={onUpdateTitle}
+      />
+    );
+
+    await user.click(screen.getAllByTitle('Auto title with LLM')[0]);
+
+    await waitFor(() => expect(screen.getByText('No better title found')).toBeInTheDocument());
+    await waitForElementToBeRemoved(() => screen.queryByText('No better title found'), { timeout: 4500 });
+  }, 7000);
 });

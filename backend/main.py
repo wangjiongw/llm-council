@@ -12,12 +12,26 @@ import copy
 from pathlib import Path
 
 from . import storage
-from .council import run_full_council_with_history, generate_conversation_title, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
+from .council import run_full_council_with_history, generate_initial_title, generate_conversation_title_from_context, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
 from .llm_settings import public_llm_settings, update_llm_settings
 from .openrouter import query_model
 from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
 app = FastAPI(title="LLM Council API")
+
+
+def _maybe_update_generated_title(conversation_id: str, title: str) -> Dict[str, Any]:
+    """Persist an automatic LLM title without overriding a locked manual title."""
+    clean_title = str(title or "").strip()
+    if not clean_title or clean_title == "New Conversation":
+        return storage.get_conversation(conversation_id) or {"title": "New Conversation"}
+    return storage.update_conversation_title(
+        conversation_id,
+        clean_title,
+        source="llm",
+        locked=False,
+        respect_lock=True,
+    )
 
 # Enable CORS for local development
 app.add_middleware(
@@ -101,6 +115,8 @@ class ContextMemoryRequest(BaseModel):
 class UpdateConversationRequest(BaseModel):
     """Partial update for list-view conversation metadata."""
     title: str | None = None
+    title_source: Literal["manual", "local", "llm"] | None = None
+    title_locked: bool | None = None
     favorite: bool | None = None
     archived: bool | None = None
     pinned: bool | None = None
@@ -157,6 +173,9 @@ class ConversationMetadata(BaseModel):
     created_at: str
     updated_at: str | None = None
     title: str
+    title_source: Literal["manual", "local", "llm"] = "local"
+    title_locked: bool = False
+    title_updated_at: str | None = None
     message_count: int
     turn_count: int = 0
     favorite: bool = False
@@ -171,6 +190,9 @@ class Conversation(BaseModel):
     created_at: str
     updated_at: str | None = None
     title: str
+    title_source: Literal["manual", "local", "llm"] = "local"
+    title_locked: bool = False
+    title_updated_at: str | None = None
     favorite: bool = False
     archived: bool = False
     pinned: bool = False
@@ -1153,7 +1175,7 @@ async def suggest_conversation_titles(conversation_id: str, limit: int = 4):
     source = "local"
     if title_source:
         try:
-            generated_title = await generate_conversation_title(title_source)
+            generated_title = await generate_conversation_title_from_context(title_source)
         except Exception as e:
             print(f"Title generation failed, falling back to local suggestions: {e}")
             generated_title = ""
@@ -1630,8 +1652,8 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
 
     # If this is the first message, generate a title
     if is_first_message:
-        title = await generate_conversation_title(request.content)
-        storage.update_conversation_title(conversation_id, title)
+        title = await generate_initial_title(request.content)
+        _maybe_update_generated_title(conversation_id, title)
 
     # Run the 3-stage council process with conversation history
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council_with_history(
@@ -1702,8 +1724,8 @@ async def send_quick_message(conversation_id: str, request: SendMessageRequest):
 
     # If this is the first message, generate a title
     if is_first_message:
-        title = await generate_conversation_title(request.content)
-        storage.update_conversation_title(conversation_id, title)
+        title = await generate_initial_title(request.content)
+        _maybe_update_generated_title(conversation_id, title)
 
     # Run quick query
     quick_result = await quick_query(
@@ -1827,7 +1849,7 @@ async def send_quick_message_stream(conversation_id: str, request: SendMessageRe
 
             title_task = None
             if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(request.content))
+                title_task = asyncio.create_task(generate_initial_title(request.content))
 
             metadata = _with_context_metadata({"mode": "quick"}, context_package, mode="quick")
             persist_assistant({
@@ -1880,7 +1902,8 @@ async def send_quick_message_stream(conversation_id: str, request: SendMessageRe
 
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                updated_conversation = _maybe_update_generated_title(conversation_id, title)
+                title = updated_conversation.get("title", title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
@@ -2030,7 +2053,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Start title generation in parallel (don't await yet)
             title_task = None
             if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(request.content))
+                title_task = asyncio.create_task(generate_initial_title(request.content))
 
             # Stage 1: Collect responses with history context
             persist_assistant({
@@ -2094,7 +2117,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
                 if title_task:
                     title = await title_task
-                    storage.update_conversation_title(conversation_id, title)
+                    updated_conversation = _maybe_update_generated_title(conversation_id, title)
+                    title = updated_conversation.get("title", title)
                     yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'complete'})}\n\n"
@@ -2161,7 +2185,8 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Wait for title generation if it was started
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                updated_conversation = _maybe_update_generated_title(conversation_id, title)
+                title = updated_conversation.get("title", title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             # Send completion event
@@ -2614,8 +2639,8 @@ async def send_message_with_files(
         _refresh_turn_from_assistant(conversation_id, turn_id, status="complete")
 
         if is_first_message:
-            title = await generate_conversation_title(content)
-            storage.update_conversation_title(conversation_id, title)
+            title = await generate_initial_title(content)
+            _maybe_update_generated_title(conversation_id, title)
 
         # 7. Clear pending file queue after a successful send. Sent files remain
         # attached to the user message via metadata.

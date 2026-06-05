@@ -183,7 +183,7 @@ class LLMSettingsTest(unittest.TestCase):
             )
 
         with (
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Title")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Title")),
             patch(
                 "backend.main.run_full_council_with_history",
                 new=AsyncMock(return_value=([{"model": "a"}], [], {"response": "ok"}, {})),

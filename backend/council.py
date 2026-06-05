@@ -1,6 +1,8 @@
 """3-stage LLM Council orchestration."""
 
 import asyncio
+import json
+import re
 from typing import List, Dict, Any, Tuple, Union
 from .openrouter import query_models_parallel, query_model, query_model_with_fallbacks
 from .llm_settings import model_list, model_name
@@ -726,57 +728,121 @@ def calculate_aggregate_rankings(
     return aggregate
 
 
-async def generate_conversation_title(user_query: str) -> str:
-    """
-    Generate a short title for a conversation based on the first user message.
+GENERIC_TITLE_KEYS = {
+    "new conversation",
+    "conversation title",
+    "question summary",
+    "chat discussion",
+    "untitled",
+    "标题",
+    "新会话",
+    "对话标题",
+}
 
-    Args:
-        user_query: The first user message
 
-    Returns:
-        A short title (3-5 words)
-    """
-    title_prompt = f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
-The title should be concise and descriptive. Do not use quotes or punctuation in the title.
+def _extract_json_title(content: str) -> str:
+    clean = content.strip()
+    if clean.startswith("```"):
+        clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s*```$", "", clean)
 
-Question: {user_query}
+    try:
+        parsed = json.loads(clean)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", clean, flags=re.DOTALL)
+        if not match:
+            return clean
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return clean
 
-Title:"""
+    if isinstance(parsed, dict):
+        return str(parsed.get("title") or "")
+    return clean
 
+
+def _clean_generated_title(raw_title: str, max_chars: int = 60) -> str:
+    title = _extract_json_title(str(raw_title or ""))
+    title = title.splitlines()[0] if title else ""
+    title = re.sub(r"^\s*(?:[-*•]|\d+[.)、]|title\s*:|标题\s*[:：])\s*", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"\s+", " ", title).strip()
+    title = title.strip("`\"'“”‘’[]()（）{}")
+    title = title.strip(" \t\r\n.,;:!?。！？；：、")
+
+    if len(title) > max_chars:
+        title = title[: max_chars - 3].rstrip() + "..."
+
+    key = title.casefold()
+    if not title or key in GENERIC_TITLE_KEYS:
+        return ""
+    if len(title) < 2:
+        return ""
+    return title
+
+
+async def _generate_title_from_prompt(title_prompt: str) -> str:
     messages = [{"role": "user", "content": title_prompt}]
 
-    # Try up to 2 times to generate title
     for attempt in range(2):
         try:
-            # Use gemini-2.5-flash for title generation (fast and cheap)
             models_to_try = [model_name("title_model"), *model_list("title_fallback_models")]
             response = await query_model_with_fallbacks(models_to_try, messages, timeout=30.0)
-
-            if not response or not response.get("content"):
-                if attempt == 0:
-                    continue  # Retry once
-                else:
-                    # Fallback to a generic title
-                    return "New Conversation"
-
-            title = response.get('content', 'New Conversation').strip()
-
-            # Clean up the title - remove quotes, limit length
-            title = title.strip('"\'')
-
-            # Truncate if too long
-            if len(title) > 50:
-                title = title[:47] + "..."
-
-            return title
-
+            title = _clean_generated_title((response or {}).get("content", ""))
+            if title:
+                return title
         except Exception as e:
-            if attempt == 0:
-                continue  # Retry once
-            else:
-                # Log error and return fallback
+            if attempt == 1:
                 print(f"Title generation failed after retries: {e}")
                 return "New Conversation"
+
+    return "New Conversation"
+
+
+async def generate_initial_title(first_user_message: str) -> str:
+    """Generate a concise title from the first user message."""
+    title_prompt = f"""You generate concise chat conversation titles from the first user message.
+
+Rules:
+- Use the same primary language as the user message.
+- Chinese title: 6-16 Chinese characters when possible.
+- English title: 3-7 words when possible.
+- Prefer concrete task or topic names over generic labels.
+- Do not include quotes, punctuation, markdown, numbering, or explanations.
+- Do not return vague titles like "Question Summary", "Chat Discussion", or "New Conversation".
+
+User message:
+{first_user_message}
+
+Return only valid JSON:
+{{"title":"..."}}"""
+    return await _generate_title_from_prompt(title_prompt)
+
+
+async def generate_conversation_title_from_context(title_source: str) -> str:
+    """Generate a concise title from a prepared conversation context."""
+    title_prompt = f"""You generate concise titles for existing chat conversations.
+
+Rules:
+- Use the same primary language as the conversation.
+- Chinese title: 6-16 Chinese characters when possible.
+- English title: 3-7 words when possible.
+- Prefer concrete task, artifact, bug, file, or decision names over generic labels.
+- If the current title is already meaningful, improve it only when the conversation clearly supports a better title.
+- Do not include quotes, punctuation, markdown, numbering, or explanations.
+- Do not return vague titles like "Question Summary", "Chat Discussion", or "New Conversation".
+
+Conversation context:
+{title_source}
+
+Return only valid JSON:
+{{"title":"..."}}"""
+    return await _generate_title_from_prompt(title_prompt)
+
+
+async def generate_conversation_title(user_query: str) -> str:
+    """Backward-compatible alias for initial title generation."""
+    return await generate_initial_title(user_query)
 
 
 async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:

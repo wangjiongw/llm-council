@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTurnCount } from '../utils/conversationUtils';
 import './Sidebar.css';
 
 
 const SIDEBAR_STATE_STORAGE_KEY = 'llm-council:sidebar-state:v2';
+const TITLE_STATUS_DISMISS_MS = 4000;
 const DEFAULT_SIDEBAR_STATE = {
   viewMode: 'active',
   favoriteOnly: false,
@@ -235,7 +236,10 @@ export default function Sidebar({
   const [savedViewName, setSavedViewName] = useState('');
   const [activeSavedViewId, setActiveSavedViewId] = useState('');
   const [titleSuggestions, setTitleSuggestions] = useState({});
+  const [titleSuggestionStatus, setTitleSuggestionStatus] = useState({});
+  const [titleSuggestionSources, setTitleSuggestionSources] = useState({});
   const [titleSuggestionLoadingId, setTitleSuggestionLoadingId] = useState(null);
+  const titleStatusTimersRef = useRef({});
 
   const allTags = useMemo(() => {
     const tags = new Set();
@@ -369,6 +373,39 @@ export default function Sidebar({
     });
   }, [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, searchFlags, tagFilter, viewMode]);
 
+  useEffect(() => () => {
+    Object.values(titleStatusTimersRef.current).forEach(clearTimeout);
+    titleStatusTimersRef.current = {};
+  }, []);
+
+  const clearTitleSuggestionStatus = (conversationId) => {
+    if (titleStatusTimersRef.current[conversationId]) {
+      clearTimeout(titleStatusTimersRef.current[conversationId]);
+      delete titleStatusTimersRef.current[conversationId];
+    }
+    setTitleSuggestionStatus((current) => {
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+  };
+
+  const showTitleSuggestionStatus = (conversationId, status, { autoDismiss = true } = {}) => {
+    if (titleStatusTimersRef.current[conversationId]) {
+      clearTimeout(titleStatusTimersRef.current[conversationId]);
+      delete titleStatusTimersRef.current[conversationId];
+    }
+    setTitleSuggestionStatus((current) => ({
+      ...current,
+      [conversationId]: status,
+    }));
+    if (autoDismiss) {
+      titleStatusTimersRef.current[conversationId] = window.setTimeout(() => {
+        clearTitleSuggestionStatus(conversationId);
+      }, TITLE_STATUS_DISMISS_MS);
+    }
+  };
+
   const handleStartEdit = (conv) => {
     setEditingId(conv.id);
     setEditTitle(conv.title || 'New Conversation');
@@ -377,7 +414,7 @@ export default function Sidebar({
 
   const handleSaveEdit = async (convId) => {
     if (editTitle.trim()) {
-      await onUpdateTitle(convId, editTitle.trim());
+      await onUpdateTitle(convId, editTitle.trim(), { source: 'manual', locked: true });
       setEditingId(null);
     }
   };
@@ -506,16 +543,32 @@ export default function Sidebar({
     event.stopPropagation();
     if (!onSuggestTitle) return;
     setTitleSuggestionLoadingId(conv.id);
+    showTitleSuggestionStatus(conv.id, { type: 'loading', message: 'Generating title...' }, { autoDismiss: false });
     try {
-      const suggestions = await onSuggestTitle(conv.id);
-      setTitleSuggestions((current) => ({ ...current, [conv.id]: suggestions }));
+      const result = await onSuggestTitle(conv.id);
+      const suggestions = Array.isArray(result) ? result : Array.isArray(result?.suggestions) ? result.suggestions : [];
+      const source = Array.isArray(result) ? 'local' : result?.source || 'local';
+      const normalizedSuggestions = suggestions.map((title) => String(title || '').trim()).filter(Boolean);
+      setTitleSuggestions((current) => ({ ...current, [conv.id]: normalizedSuggestions }));
+      setTitleSuggestionSources((current) => ({ ...current, [conv.id]: source }));
       const currentTitle = (conv.title || 'New Conversation').trim();
-      const nextTitle = (suggestions || [])
-        .map((title) => String(title || '').trim())
-        .find((title) => title && title !== currentTitle);
+      const currentTitleKey = currentTitle.toLowerCase();
+      const nextTitle = normalizedSuggestions.find((title) => {
+        const titleKey = title.toLowerCase();
+        return titleKey !== currentTitleKey;
+      });
       if (nextTitle && onUpdateTitle) {
-        await onUpdateTitle(conv.id, nextTitle);
+        await onUpdateTitle(conv.id, nextTitle, { source, locked: false });
+        showTitleSuggestionStatus(conv.id, { type: 'success', message: source === 'llm' ? 'Applied LLM title' : 'Applied local title' });
+      } else if (normalizedSuggestions.length > 0) {
+        showTitleSuggestionStatus(conv.id, { type: 'neutral', message: 'No better title found' });
+      } else {
+        showTitleSuggestionStatus(conv.id, { type: 'neutral', message: 'No title text available' });
       }
+    } catch (error) {
+      console.error('Failed to suggest title:', error);
+      setTitleSuggestions((current) => ({ ...current, [conv.id]: [] }));
+      showTitleSuggestionStatus(conv.id, { type: 'error', message: 'Title generation failed' });
     } finally {
       setTitleSuggestionLoadingId(null);
     }
@@ -523,8 +576,10 @@ export default function Sidebar({
 
   const handleUseTitleSuggestion = async (event, convId, title) => {
     event.stopPropagation();
-    await onUpdateTitle(convId, title);
+    const source = titleSuggestionSources[convId] || 'manual';
+    await onUpdateTitle(convId, title, { source, locked: true });
     setTitleSuggestions((current) => ({ ...current, [convId]: [] }));
+    showTitleSuggestionStatus(convId, { type: 'success', message: 'Applied selected title' });
   };
 
   const handleMetadataClick = async (event, conv, updates) => {
@@ -1065,6 +1120,26 @@ export default function Sidebar({
                             </div>
                           </div>
                         </div>
+                        {titleSuggestionStatus[conv.id]?.message && (
+                          <div
+                            className={`title-suggestion-status ${titleSuggestionStatus[conv.id]?.type || 'neutral'}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span>{titleSuggestionStatus[conv.id].message}</span>
+                            <button
+                              type="button"
+                              className="title-suggestion-status-close"
+                              aria-label="Dismiss title status"
+                              title="Dismiss"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                clearTitleSuggestionStatus(conv.id);
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
                         {titleSuggestions[conv.id]?.length > 0 && (
                           <div className="title-suggestions" onClick={(e) => e.stopPropagation()}>
                             {titleSuggestions[conv.id].map((title) => (

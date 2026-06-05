@@ -886,6 +886,60 @@ body.sidebar-resizing {
   color: color-mix(in srgb, var(--tag-color) 82%, var(--app-text));
 }
 
+.title-suggestion-status {
+  margin-top: 6px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.title-suggestion-status-close {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 18px;
+  padding: 0;
+  opacity: 0.72;
+}
+
+.title-suggestion-status-close:hover {
+  background: rgba(128, 128, 128, 0.14);
+  opacity: 1;
+}
+
+.title-suggestion-status.success {
+  border-color: rgba(31, 136, 61, 0.35);
+  background: rgba(31, 136, 61, 0.08);
+  color: var(--app-text);
+}
+
+.title-suggestion-status.error {
+  border-color: rgba(207, 34, 46, 0.35);
+  background: rgba(207, 34, 46, 0.08);
+  color: var(--app-text);
+}
+
+.title-suggestion-status.loading,
+.title-suggestion-status.neutral {
+  border-color: var(--border-color);
+  background: var(--surface-muted);
+}
+
 .title-suggestions {
   display: flex;
   flex-direction: column;

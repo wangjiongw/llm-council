@@ -65,7 +65,7 @@ class QuickStreamTest(unittest.TestCase):
             }
 
         with (
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Quick title")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Quick title")),
             patch("backend.council.model_name", return_value="quick-model"),
             patch("backend.council.model_list", return_value=[]),
             patch("backend.council.query_model", new=AsyncMock(side_effect=fake_query_model)),
@@ -132,7 +132,7 @@ class QuickStreamTest(unittest.TestCase):
 
     def test_quick_stream_persists_failed_placeholder_on_error(self):
         with (
-            patch("backend.main.generate_conversation_title", new=AsyncMock(return_value="Quick title")),
+            patch("backend.main.generate_initial_title", new=AsyncMock(return_value="Quick title")),
             patch("backend.main.quick_query", new=AsyncMock(side_effect=RuntimeError("provider down"))),
         ):
             response = self.client.post(

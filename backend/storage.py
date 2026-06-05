@@ -292,6 +292,13 @@ def _ensure_conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any
     conversation["archived"] = bool(conversation.get("archived", False))
     conversation["pinned"] = bool(conversation.get("pinned", False))
     conversation["tags"] = _normalize_conversation_tags(conversation.get("tags"))
+    title_source = str(conversation.get("title_source") or "local").strip().lower()
+    if title_source not in {"manual", "local", "llm"}:
+        title_source = "local"
+    conversation["title_source"] = title_source
+    conversation["title_locked"] = bool(conversation.get("title_locked", False))
+    title_updated_at = conversation.get("title_updated_at")
+    conversation["title_updated_at"] = str(title_updated_at) if title_updated_at else None
     return conversation
 
 
@@ -312,6 +319,9 @@ def _conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": normalized["created_at"],
         "updated_at": normalized["updated_at"],
         "title": normalized.get("title", "New Conversation"),
+        "title_source": normalized["title_source"],
+        "title_locked": normalized["title_locked"],
+        "title_updated_at": normalized["title_updated_at"],
         "message_count": len(messages),
         "turn_count": _conversation_turn_count(messages),
         "favorite": normalized["favorite"],
@@ -340,6 +350,9 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
             "created_at": now,
             "updated_at": now,
             "title": "New Conversation",
+            "title_source": "local",
+            "title_locked": False,
+            "title_updated_at": None,
             "favorite": False,
             "archived": False,
             "pinned": False,
@@ -1304,12 +1317,20 @@ def get_context_audit(conversation_id: str) -> Dict[str, Any]:
 
 
 def _apply_conversation_metadata_updates(conversation: Dict[str, Any], updates: Dict[str, Any], *, tag_mode: str = "replace") -> None:
-    allowed_keys = {"title", "favorite", "archived", "pinned", "tags"}
+    allowed_keys = {"title", "title_source", "title_locked", "favorite", "archived", "pinned", "tags"}
+    title_was_updated = False
     for key, value in updates.items():
         if key not in allowed_keys or value is None:
             continue
         if key == "title":
             conversation["title"] = str(value).strip()
+            title_was_updated = True
+        elif key == "title_source":
+            source = str(value).strip().lower()
+            if source in {"manual", "local", "llm"}:
+                conversation["title_source"] = source
+        elif key == "title_locked":
+            conversation["title_locked"] = bool(value)
         elif key == "tags":
             incoming_tags = _normalize_conversation_tags(value)
             if tag_mode == "add":
@@ -1321,6 +1342,11 @@ def _apply_conversation_metadata_updates(conversation: Dict[str, Any], updates: 
                 conversation["tags"] = incoming_tags
         else:
             conversation[key] = bool(value)
+
+    if title_was_updated:
+        conversation["title_updated_at"] = datetime.utcnow().isoformat()
+        if "title_source" not in updates:
+            conversation["title_source"] = "manual"
 
 
 def update_conversation_metadata(conversation_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -1493,15 +1519,33 @@ def suggest_conversation_titles(conversation_id: str, limit: int = 4) -> List[st
     return deduped
 
 
-def update_conversation_title(conversation_id: str, title: str):
-    """
-    Update the title of a conversation.
+def update_conversation_title(
+    conversation_id: str,
+    title: str,
+    *,
+    source: str = "manual",
+    locked: Optional[bool] = None,
+    respect_lock: bool = False,
+) -> Dict[str, Any]:
+    """Update the title of a conversation with title provenance metadata."""
+    clean_title = str(title or "").strip()
+    with _conversation_lock(conversation_id):
+        conversation = get_conversation(conversation_id)
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        _ensure_conversation_metadata(conversation)
+        if respect_lock and conversation.get("title_locked"):
+            return conversation
+        if not clean_title:
+            return conversation
 
-    Args:
-        conversation_id: Conversation identifier
-        title: New title for the conversation
-    """
-    update_conversation_metadata(conversation_id, {"title": title})
+        updates: Dict[str, Any] = {"title": clean_title, "title_source": source}
+        if locked is not None:
+            updates["title_locked"] = locked
+        _apply_conversation_metadata_updates(conversation, updates)
+        _touch_conversation(conversation)
+        save_conversation(conversation)
+        return conversation
 
 
 def get_conversation_history(

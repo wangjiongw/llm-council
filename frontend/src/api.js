@@ -501,9 +501,14 @@ export const api = {
    * Update conversation title.
    * @param {string} conversationId - The conversation ID
    * @param {string} title - The new title
+   * @param {{source?: string, locked?: boolean}} options - Optional title provenance metadata
    */
-  async updateConversationTitle(conversationId, title) {
-    return this.updateConversation(conversationId, { title });
+  async updateConversationTitle(conversationId, title, options = {}) {
+    return this.updateConversation(conversationId, {
+      title,
+      ...(options.source ? { title_source: options.source } : {}),
+      ...(options.locked !== undefined ? { title_locked: options.locked } : {}),
+    });
   },
 
   /**
