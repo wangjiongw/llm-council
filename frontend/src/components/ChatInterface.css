@@ -1455,24 +1455,6 @@
   white-space: pre-wrap;
 }
 
-.assistant-final-body.collapsed {
-  position: relative;
-  max-height: 640px;
-  overflow: hidden;
-}
-
-.assistant-final-body.collapsed::after {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 96px;
-  background: linear-gradient(to bottom, transparent, var(--surface-bg));
-  content: "";
-  pointer-events: none;
-}
-
-
 .search-hit {
   border-radius: 3px;
   background: color-mix(in srgb, #facc15 55%, transparent);
@@ -1528,10 +1510,4 @@
   border-color: rgba(207, 34, 46, 0.35);
   background: rgba(207, 34, 46, 0.07);
   color: var(--app-text);
-}
-
-
-.assistant-final-body:not(.collapsed) {
-  max-height: none;
-  overflow: visible;
 }

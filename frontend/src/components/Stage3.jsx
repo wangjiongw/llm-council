@@ -1,49 +1,10 @@
-import { useEffect, useMemo, useRef, useState, memo } from 'react';
+import { useMemo, useRef, useState, memo } from 'react';
+import CopyButton from './CopyButton';
 import RichMarkdown from './RichMarkdown';
 import './Stage3.css';
 
 const LONG_ANSWER_CHARS = 3600;
 const LONG_ANSWER_LINES = 72;
-
-const CopyButton = ({ content, onCopy }) => {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      onCopy?.();
-    } catch (err) {
-      console.error('Failed to copy:', err);
-      // Fallback for browsers that don't support clipboard API
-      const textArea = document.createElement('textarea');
-      textArea.value = content;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-        onCopy?.();
-      } catch (fallbackErr) {
-        console.error('Fallback copy failed:', fallbackErr);
-      }
-      document.body.removeChild(textArea);
-    }
-  };
-
-  return (
-    <button
-      className={`copy-button ${copied ? 'copied' : ''}`}
-      onClick={handleCopy}
-      title="Copy final answer"
-      aria-label="Copy final answer"
-    >
-      {copied ? '✓' : '📋'}
-    </button>
-  );
-};
 
 const extractHeadings = (content) => {
   const headings = [];
@@ -79,10 +40,6 @@ function Stage3({ finalResponse, hasContext = false, defaultCollapsed = false })
   const isPreviewCollapsed = isHistoryPreviewCollapsed || isLongPreviewCollapsed;
   const isExpanded = !isPreviewCollapsed;
 
-  useEffect(() => {
-    setIsManuallyOpen(!defaultCollapsed);
-  }, [defaultCollapsed, response]);
-
   if (!finalResponse) {
     return null;
   }
@@ -117,7 +74,8 @@ function Stage3({ finalResponse, hasContext = false, defaultCollapsed = false })
           </div>
           <CopyButton
             content={response}
-            onCopy={() => console.log(`Copied final answer from ${finalResponse.model}`)}
+            title="Copy final answer"
+            ariaLabel="Copy final answer"
           />
         </div>
 

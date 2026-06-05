@@ -1,0 +1,41 @@
+.copy-button {
+  display: flex;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: #f0f0f0;
+  color: #666;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: all 0.2s ease;
+}
+
+.copy-button:hover {
+  border-color: #4a90e2;
+  background: #e8e8e8;
+  color: #4a90e2;
+}
+
+.copy-button:active {
+  background: #d0e0f0;
+  transform: translateY(1px);
+}
+
+.copy-button.copied {
+  border-color: #52c41a;
+  background: #52c41a;
+  color: white;
+  animation: copySuccess 0.3s ease;
+}
+
+@keyframes copySuccess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}

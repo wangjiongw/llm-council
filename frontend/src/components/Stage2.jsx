@@ -1,46 +1,7 @@
 import { useState, memo } from 'react';
+import CopyButton from './CopyButton';
 import RichMarkdown from './RichMarkdown';
 import './Stage2.css';
-
-const CopyButton = ({ content, onCopy }) => {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-      onCopy?.();
-    } catch (err) {
-      console.error('Failed to copy:', err);
-      // Fallback for browsers that don't support clipboard API
-      const textArea = document.createElement('textarea');
-      textArea.value = content;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-        onCopy?.();
-      } catch (fallbackErr) {
-        console.error('Fallback copy failed:', fallbackErr);
-      }
-      document.body.removeChild(textArea);
-    }
-  };
-
-  return (
-    <button
-      className={`copy-button ${copied ? 'copied' : ''}`}
-      onClick={handleCopy}
-      title="Copy content"
-      aria-label="Copy content"
-    >
-      {copied ? '✓' : '📋'}
-    </button>
-  );
-};
 
 function deAnonymizeText(text, labelToModel) {
   if (!labelToModel) return text;
@@ -110,7 +71,8 @@ function Stage2({ rankings, labelToModel, aggregateRankings, hasContext = false 
           {!isFailed && (
             <CopyButton
               content={deAnonymizeText(activeRanking.ranking, labelToModel)}
-              onCopy={() => console.log(`Copied evaluation from ${activeRanking.model}`)}
+              title="Copy content"
+              ariaLabel="Copy content"
             />
           )}
         </div>

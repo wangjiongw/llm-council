@@ -805,6 +805,7 @@ const MessageItem = memo(function MessageItem({
           )}
           {msg.stage3 && (
             <Stage3
+              key={`${messageIndex}-${msg.stage3?.response?.length || 0}-${isLatestAssistantMessage ? 'latest' : 'history'}`}
               finalResponse={msg.stage3}
               hasContext={hasModelContext}
               defaultCollapsed={!isLatestAssistantMessage}

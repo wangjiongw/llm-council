@@ -695,7 +695,7 @@ export const api = {
       await readSSEEvents(response, onEvent, controller);
     } catch (error) {
       if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
-        console.log('Quick stream aborted by user');
+        console.debug('Quick stream aborted by user');
         throw new Error('Query stopped by user');
       }
       throw error;
@@ -874,7 +874,7 @@ export const api = {
       await readSSEEvents(response, onEvent, controller);
     } catch (error) {
       if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
-        console.log('Stream aborted by user');
+        console.debug('Stream aborted by user');
         throw new Error('Query stopped by user');
       }
       throw error;
@@ -915,7 +915,7 @@ export const api = {
       await readSSEEvents(response, onEvent, controller);
     } catch (error) {
       if (error.name === 'AbortError' || error.message === 'Query stopped by user') {
-        console.log('Resume stream aborted by user');
+        console.debug('Resume stream aborted by user');
         throw new Error('Query stopped by user');
       }
       throw error;
