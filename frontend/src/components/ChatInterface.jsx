@@ -545,6 +545,7 @@ const MessageItem = memo(function MessageItem({
   turnAnchorRef,
   messageAnchorRef,
   turnAudit,
+  isLatestAssistantMessage = false,
   isHighlighted = false,
 }) {
   const isUserMessage = msg.role === 'user';
@@ -802,7 +803,13 @@ const MessageItem = memo(function MessageItem({
               <ModelStatusList statuses={msg.modelStatus?.stage3} />
             </div>
           )}
-          {msg.stage3 && <Stage3 finalResponse={msg.stage3} hasContext={hasModelContext} />}
+          {msg.stage3 && (
+            <Stage3
+              finalResponse={msg.stage3}
+              hasContext={hasModelContext}
+              defaultCollapsed={!isLatestAssistantMessage}
+            />
+          )}
 
           <ContextAuditDetails
             turnAudit={turnAudit}
@@ -902,6 +909,9 @@ export default function ChatInterface({
   const messagesEndRef = useRef(null);
   const contextPanelRef = useRef(null);
   const inputRef = useRef(null);
+  const inputCompositionRef = useRef(false);
+  const inputCompositionJustEndedRef = useRef(false);
+  const inputCompositionEndTimerRef = useRef(null);
   const turnAnchorsRef = useRef(new Map());
   const messageAnchorsRef = useRef(new Map());
   const draftHydratedConversationRef = useRef(null);
@@ -914,6 +924,7 @@ export default function ChatInterface({
   const [editTarget, setEditTarget] = useState(null);
   const [scrollMetrics, setScrollMetrics] = useState({ top: 0, height: 0 });
   const [measuredMessageHeights, setMeasuredMessageHeights] = useState(() => new Map());
+  const [pendingVirtualScrollTarget, setPendingVirtualScrollTarget] = useState(null);
   const resizeObserversRef = useRef(new Map());
 
   const draftStorageKey = conversation?.id ? `${DRAFT_STORAGE_PREFIX}${conversation.id}` : null;
@@ -1129,11 +1140,21 @@ export default function ChatInterface({
   const boundedSearchResultIndex = Math.max(0, Math.min(activeSearchResultIndex, messageSearchResults.length - 1));
   const activeSearchResult = messageSearchResults[boundedSearchResultIndex] || null;
   const messageSearchMatchTotal = messageSearchResults.reduce((total, result) => total + (result.matchCount || 0), 0);
+  const latestAssistantMessageIndex = useMemo(() => {
+    const messages = conversation?.messages || [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'assistant' && messages[index]?.stage3) {
+        return index;
+      }
+    }
+    return -1;
+  }, [conversation?.messages]);
 
   useEffect(() => {
     turnAnchorsRef.current.clear();
     messageAnchorsRef.current.clear();
     setHighlightedMessageIndex(null);
+    setPendingVirtualScrollTarget(null);
     const savedSearchState = readConversationSearchState(conversation?.id);
     setMessageSearchQuery(savedSearchState.query);
     setMessageSearchScope(savedSearchState.scope);
@@ -1218,9 +1239,18 @@ export default function ChatInterface({
     const anchor = messageAnchorsRef.current.get(messageIndex);
     if (anchor) {
       anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setPendingVirtualScrollTarget((current) => (
+        current?.messageIndex === messageIndex ? null : current
+      ));
     } else if (shouldVirtualizeMessages && messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTo({ top: estimateMessageOffset(messageIndex), behavior: 'smooth' });
-      window.requestAnimationFrame(() => {
+      const estimatedTop = estimateMessageOffset(messageIndex);
+      setPendingVirtualScrollTarget({ messageIndex, nonce: Date.now() });
+      setScrollMetrics((current) => ({
+        top: estimatedTop,
+        height: current.height || messagesContainerRef.current?.clientHeight || 720,
+      }));
+      messagesContainerRef.current.scrollTo({ top: estimatedTop, behavior: 'smooth' });
+      window.setTimeout(() => {
         messageAnchorsRef.current.get(messageIndex)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     } else {
@@ -1251,17 +1281,9 @@ export default function ChatInterface({
     const entry = turnEntries[boundedIndex];
     if (!entry) return;
 
-    const anchor = turnAnchorsRef.current.get(entry.messageIndex);
-    if (anchor) {
-      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } else if (shouldVirtualizeMessages && messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTo({ top: estimateMessageOffset(entry.messageIndex), behavior: 'smooth' });
-      window.requestAnimationFrame(() => {
-        turnAnchorsRef.current.get(entry.messageIndex)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    scrollToMessage(entry.messageIndex);
     setCurrentTurnIndex(boundedIndex);
-  }, [estimateMessageOffset, shouldVirtualizeMessages, turnEntries]);
+  }, [scrollToMessage, turnEntries]);
 
   const scrollMessagesToTop = useCallback(() => {
     messagesContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1325,6 +1347,18 @@ export default function ChatInterface({
 
     if (turnEntries.length === 0) return;
 
+    if (shouldVirtualizeMessages) {
+      const threshold = container.scrollTop + 96;
+      let activeIndex = 0;
+      turnEntries.forEach((entry, index) => {
+        if (estimateMessageOffset(entry.messageIndex) <= threshold) {
+          activeIndex = index;
+        }
+      });
+      setCurrentTurnIndex(prev => (prev === activeIndex ? prev : activeIndex));
+      return;
+    }
+
     const containerTop = container.getBoundingClientRect().top;
     let activeIndex = 0;
     turnEntries.forEach((entry, index) => {
@@ -1336,7 +1370,7 @@ export default function ChatInterface({
     });
 
     setCurrentTurnIndex(prev => (prev === activeIndex ? prev : activeIndex));
-  }, [turnEntries]);
+  }, [estimateMessageOffset, shouldVirtualizeMessages, turnEntries]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -1421,6 +1455,12 @@ export default function ChatInterface({
       }
     }
 
+    const pendingIndex = pendingVirtualScrollTarget?.messageIndex;
+    if (Number.isInteger(pendingIndex) && pendingIndex >= 0 && pendingIndex < count) {
+      startIndex = Math.min(startIndex, Math.max(0, pendingIndex - 2));
+      endIndex = Math.max(endIndex, Math.min(count, pendingIndex + 3));
+    }
+
     const topSpacer = heights.slice(0, startIndex).reduce((total, height) => total + height, 0);
     const bottomSpacer = heights.slice(endIndex).reduce((total, height) => total + height, 0);
     return {
@@ -1428,7 +1468,23 @@ export default function ChatInterface({
       bottomSpacer,
       items: conversationMessages.slice(startIndex, endIndex).map((msg, index) => ({ msg, index: startIndex + index })),
     };
-  }, [conversationMessages, isLoading, measuredMessageHeights, scrollMetrics, shouldVirtualizeMessages]);
+  }, [conversationMessages, isLoading, measuredMessageHeights, pendingVirtualScrollTarget, scrollMetrics, shouldVirtualizeMessages]);
+
+  useEffect(() => {
+    if (!pendingVirtualScrollTarget) return undefined;
+    const anchor = messageAnchorsRef.current.get(pendingVirtualScrollTarget.messageIndex);
+    if (!anchor) return undefined;
+
+    const frameId = window.requestAnimationFrame(() => {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setHighlightedMessageIndex(pendingVirtualScrollTarget.messageIndex);
+      setPendingVirtualScrollTarget((current) => (
+        current?.nonce === pendingVirtualScrollTarget.nonce ? null : current
+      ));
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [pendingVirtualScrollTarget, virtualMessageWindow.items]);
 
   const handleFileUploadLocal = useCallback(async (newFiles) => {
     await onFileUpload(newFiles);
@@ -1557,7 +1613,46 @@ export default function ChatInterface({
     }
   }, [attachedFiles, input, isLoading, isPreviewLoading, onPreviewContext]);
 
+  const handleCompositionStart = useCallback(() => {
+    inputCompositionRef.current = true;
+    inputCompositionJustEndedRef.current = false;
+    if (inputCompositionEndTimerRef.current) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+      inputCompositionEndTimerRef.current = null;
+    }
+  }, []);
+
+  const handleCompositionEnd = useCallback(() => {
+    inputCompositionRef.current = false;
+    inputCompositionJustEndedRef.current = true;
+    if (inputCompositionEndTimerRef.current) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+    }
+    inputCompositionEndTimerRef.current = window.setTimeout(() => {
+      inputCompositionJustEndedRef.current = false;
+      inputCompositionEndTimerRef.current = null;
+    }, 120);
+  }, []);
+
+  useEffect(() => () => {
+    if (inputCompositionEndTimerRef.current) {
+      window.clearTimeout(inputCompositionEndTimerRef.current);
+    }
+  }, []);
+
   const handleKeyDown = useCallback((e) => {
+    const isImeEnter = e.key === 'Enter' && (
+      e.isComposing ||
+      e.nativeEvent?.isComposing ||
+      e.keyCode === 229 ||
+      e.which === 229 ||
+      inputCompositionRef.current ||
+      inputCompositionJustEndedRef.current
+    );
+    if (isImeEnter) {
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       handleQuickSubmit(e);
@@ -1719,6 +1814,7 @@ export default function ChatInterface({
                   onOpenSettings={onOpenSettings}
                   onOpenContextPolicy={scrollToContextPanel}
                   isLastMessage={index === conversation.messages.length - 1}
+                  isLatestAssistantMessage={index === latestAssistantMessageIndex}
                   messageIndex={index}
                   turnAnchorRef={msg.role === 'user' ? (node) => registerTurnAnchor(index, node) : undefined}
                   messageAnchorRef={(node) => registerMeasuredMessageAnchor(index, node)}
@@ -1849,6 +1945,8 @@ export default function ChatInterface({
                 }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 disabled={isLoading}

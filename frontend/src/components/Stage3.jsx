@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, memo } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import RichMarkdown from './RichMarkdown';
 import './Stage3.css';
 
@@ -68,20 +68,27 @@ const extractHeadings = (content) => {
   return headings.slice(0, 12);
 };
 
-function Stage3({ finalResponse, hasContext = false }) {
+function Stage3({ finalResponse, hasContext = false, defaultCollapsed = false }) {
   const contentRef = useRef(null);
   const response = finalResponse?.response || '';
   const headings = useMemo(() => extractHeadings(response), [response]);
   const isLongAnswer = response.length > LONG_ANSWER_CHARS || response.split('\n').length > LONG_ANSWER_LINES;
-  const [expandedResponse, setExpandedResponse] = useState(null);
-  const isExpanded = !isLongAnswer || expandedResponse === response;
+  const [isManuallyOpen, setIsManuallyOpen] = useState(!defaultCollapsed);
+  const isHistoryPreviewCollapsed = defaultCollapsed && !isManuallyOpen;
+  const isLongPreviewCollapsed = !defaultCollapsed && isLongAnswer && !isManuallyOpen;
+  const isPreviewCollapsed = isHistoryPreviewCollapsed || isLongPreviewCollapsed;
+  const isExpanded = !isPreviewCollapsed;
+
+  useEffect(() => {
+    setIsManuallyOpen(!defaultCollapsed);
+  }, [defaultCollapsed, response]);
 
   if (!finalResponse) {
     return null;
   }
 
   const jumpToHeading = (headingIndex) => {
-    setExpandedResponse(response);
+    setIsManuallyOpen(true);
     window.requestAnimationFrame(() => {
       const nodes = contentRef.current?.querySelectorAll('h1, h2, h3, h4') || [];
       nodes[headingIndex]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -114,9 +121,9 @@ function Stage3({ finalResponse, hasContext = false }) {
           />
         </div>
 
-        {(headings.length > 1 || isLongAnswer) && (
+        {(headings.length > 1 || isLongAnswer || defaultCollapsed) && (
           <div className="answer-navigation">
-            {headings.length > 1 && (
+            {headings.length > 1 && isExpanded && (
               <div className="answer-outline" aria-label="Answer outline">
                 <span>Outline</span>
                 {headings.map((heading, index) => (
@@ -132,11 +139,11 @@ function Stage3({ finalResponse, hasContext = false }) {
                 ))}
               </div>
             )}
-            {isLongAnswer && (
+            {(isLongAnswer || defaultCollapsed) && (
               <button
                 type="button"
                 className="answer-collapse-toggle"
-                onClick={() => setExpandedResponse(isExpanded ? null : response)}
+                onClick={() => setIsManuallyOpen((open) => !open)}
               >
                 {isExpanded ? 'Collapse answer' : 'Show full answer'}
               </button>
@@ -144,10 +151,13 @@ function Stage3({ finalResponse, hasContext = false }) {
           </div>
         )}
 
-        <div className={`final-text-shell ${isLongAnswer && !isExpanded ? 'collapsed' : ''}`} ref={contentRef}>
+        <div
+          className={`final-text-shell ${isPreviewCollapsed ? 'collapsed' : ''} ${isHistoryPreviewCollapsed ? 'history-preview' : ''}`}
+          ref={contentRef}
+        >
           <RichMarkdown content={response} className="final-text" />
         </div>
-        {isLongAnswer && !isExpanded && <div className="final-text-fade" aria-hidden="true" />}
+        {isPreviewCollapsed && <div className="final-text-fade" aria-hidden="true" />}
       </div>
     </div>
   );

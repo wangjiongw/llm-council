@@ -30,7 +30,7 @@
 - `frontend/src/components/ChatInterface.jsx` / `ChatInterface.css`：扩展会话内搜索范围、接收外部 message jump、Quick/Council Summary、ErrorActionPanel 技术细节折叠、长 assistant 回答折叠。
 - `frontend/src/components/RichMarkdown.jsx` / `RichMarkdown.css`：新增代码行号、长代码折叠/展开，Copy code 保持复制原始代码。
 
-补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。第三轮已完成搜索结果按会话分组、命中点击 query 注入、memory 命中滚动到 Context 区、长会话消息虚拟滚动试点、表格搜索/排序/CSV 下载、代码下载与 diff 专用样式、Mermaid 预览/复制 SVG/下载 SVG/PNG，并新增 Vitest 组件测试。剩余后续增强主要是更细粒度的搜索结果分面、Markdown AST 级缓存、虚拟滚动视觉 smoke、XLSX 导出和更完整的 e2e 测试。
+补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。第三轮已完成搜索结果按会话分组、命中点击 query 注入、memory 命中滚动到 Context 区、长会话消息虚拟滚动试点、表格搜索/排序/CSV 下载、代码下载与 diff 专用样式、Mermaid 预览/复制 SVG/下载 SVG/PNG，并新增 Vitest 组件测试。第四轮补齐会话内搜索与虚拟滚动的可靠性：远距离消息命中会先按估算位置滚动、强制渲染目标窗口，再在目标 DOM 挂载后精确 `scrollIntoView` 并高亮；turn 导航在虚拟滚动下改用估算 offset 更新当前 turn，避免仅依赖已挂载 anchor；新增 `ChatInterface.test.jsx` 覆盖普通会话搜索跳转和长会话虚拟滚动远端命中定位。剩余后续增强主要是更细粒度的搜索结果分面、Markdown AST 级缓存、虚拟滚动视觉 smoke、XLSX 导出和更完整的 e2e 测试。
 
 ## 1. 会话内全文搜索和跳转
 

@@ -177,6 +177,10 @@
   overflow: hidden;
 }
 
+.final-text-shell.collapsed.history-preview {
+  max-height: 280px;
+}
+
 .final-text-fade {
   height: 72px;
   margin-top: -72px;
