@@ -118,6 +118,29 @@ describe('Sidebar conversation management controls', () => {
     expect(onBatchUpdateConversations).toHaveBeenCalledWith(['conv-1'], { favorite: true }, 'replace');
   });
 
+  it('edits and removes tags on a single conversation', async () => {
+    const onUpdateMetadata = vi.fn(async () => {});
+    const user = userEvent.setup();
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onUpdateMetadata={onUpdateMetadata}
+      />
+    );
+
+    await user.click(screen.getByLabelText('Remove tag context from Architecture Notes'));
+    expect(onUpdateMetadata).toHaveBeenCalledWith('conv-1', { tags: [] });
+
+    await user.click(screen.getByLabelText('Edit tags for Architecture Notes'));
+    const input = screen.getByPlaceholderText('tag-a, tag-b / 标签一，标签二');
+    await user.clear(input);
+    await user.type(input, 'context，review、论文；上下文');
+    await user.keyboard('{Enter}');
+
+    expect(onUpdateMetadata).toHaveBeenCalledWith('conv-1', { tags: ['context', 'review', '论文', '上下文'] });
+  });
+
   it('saves current filters and updates tag colors', async () => {
     const onSaveView = vi.fn(async () => ({
       tag_colors: { context: '#123abc' },

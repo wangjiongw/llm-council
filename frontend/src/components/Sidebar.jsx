@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatTurnCount } from '../utils/conversationUtils';
 import './Sidebar.css';
 
 
@@ -69,19 +70,6 @@ const groupConversationDate = (value) => {
   return 'Older';
 };
 
-const conversationTurnCount = (conversation) => {
-  const explicitTurnCount = Number(conversation?.turn_count);
-  if (Number.isFinite(explicitTurnCount) && explicitTurnCount >= 0) {
-    return explicitTurnCount;
-  }
-  const messageCount = Number(conversation?.message_count) || 0;
-  return Math.ceil(messageCount / 2);
-};
-
-const formatTurnCount = (conversation) => {
-  const turns = conversationTurnCount(conversation);
-  return `${turns} turn${turns === 1 ? '' : 's'}`;
-};
 
 const sortConversations = (conversations) => [...conversations].sort((a, b) => {
   const pinnedDelta = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
@@ -115,8 +103,10 @@ const groupConversations = (conversations, { archivedView = false } = {}) => {
   return groups;
 };
 
+const TAG_SEPARATOR_PATTERN = /[,，、;；\n\r]+/;
+
 const parseTags = (value) => value
-  .split(',')
+  .split(TAG_SEPARATOR_PATTERN)
   .map((tag) => tag.trim())
   .filter(Boolean);
 
@@ -415,6 +405,13 @@ export default function Sidebar({
     await onUpdateMetadata(convId, { tags: parseTags(tagInput) });
     setTagEditingId(null);
     setTagInput('');
+  };
+
+  const handleRemoveTag = async (event, conv, tagToRemove) => {
+    event.stopPropagation();
+    const removeKey = String(tagToRemove || '').toLowerCase();
+    const nextTags = (conv.tags || []).filter((tag) => String(tag || '').toLowerCase() !== removeKey);
+    await onUpdateMetadata(conv.id, { tags: nextTags });
   };
 
   const handleTagKeyDown = (e, convId) => {
@@ -797,7 +794,7 @@ export default function Sidebar({
               type="text"
               value={batchTagInput}
               onChange={(event) => setBatchTagInput(event.target.value)}
-              placeholder="tag-a, tag-b"
+              placeholder="tag-a, tag-b / 标签一，标签二"
               aria-label="Batch tags"
             />
             <button type="button" onClick={() => handleBatchTags('add')} disabled={!batchTagInput.trim()}>Add tags</button>
@@ -932,7 +929,7 @@ export default function Sidebar({
                           onKeyDown={(e) => handleTagKeyDown(e, conv.id)}
                           className="title-input"
                           autoFocus
-                          placeholder="tag-a, tag-b"
+                          placeholder="tag-a, tag-b / 标签一，标签二"
                           maxLength={240}
                         />
                         <div className="title-edit-actions">
@@ -1026,19 +1023,32 @@ export default function Sidebar({
                             <span className="conversation-meta">{formatTurnCount(conv)}</span>
                             <div className="conversation-tags">
                               {(conv.tags || []).map((tag) => (
-                                <button
-                                  type="button"
-                                  className="conversation-tag"
+                                <span
+                                  className="conversation-tag-item"
                                   key={tag}
                                   style={{ '--tag-color': tagColorFor(tag) }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setTagFilter(tag);
-                                  }}
-                                  title={`Filter by ${tag}`}
                                 >
-                                  {tag}
-                                </button>
+                                  <button
+                                    type="button"
+                                    className="conversation-tag"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setTagFilter(tag);
+                                    }}
+                                    title={`Filter by ${tag}`}
+                                  >
+                                    {tag}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="conversation-tag-remove"
+                                    onClick={(e) => handleRemoveTag(e, conv, tag)}
+                                    aria-label={`Remove tag ${tag} from ${conv.title || 'New Conversation'}`}
+                                    title={`Remove ${tag}`}
+                                  >
+                                    ×
+                                  </button>
+                                </span>
                               ))}
                               <button
                                 type="button"
@@ -1047,6 +1057,8 @@ export default function Sidebar({
                                   e.stopPropagation();
                                   handleStartTagEdit(conv);
                                 }}
+                                aria-label={`Edit tags for ${conv.title || 'New Conversation'}`}
+                                title="Edit tags"
                               >
                                 Tags
                               </button>

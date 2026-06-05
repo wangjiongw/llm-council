@@ -4,6 +4,7 @@ import ChatInterface from './components/ChatInterface';
 import LLMSettingsModal from './components/LLMSettingsModal';
 import { api } from './api';
 import { processUploadedFiles } from './utils/fileUtils';
+import { conversationTurnCount } from './utils/conversationUtils';
 import './App.css';
 
 const THEME_STORAGE_KEY = 'llm-council-theme';
@@ -156,7 +157,7 @@ function App() {
     created_at: conversation.created_at,
     updated_at: conversation.updated_at || conversation.created_at,
     message_count: conversation.messages?.length ?? fallback.message_count ?? 0,
-    turn_count: conversation.turn_count ?? (conversation.messages ? conversation.messages.filter((message) => message?.role === 'user').length : fallback.turn_count ?? Math.ceil((fallback.message_count ?? 0) / 2)),
+    turn_count: conversationTurnCount({ ...fallback, ...conversation }),
     title: conversation.title || fallback.title || 'New Conversation',
     favorite: Boolean(conversation.favorite),
     archived: Boolean(conversation.archived),
@@ -771,7 +772,7 @@ function App() {
         break;
 
       default:
-        console.log('Unknown event type:', eventType);
+        console.warn('Unknown event type:', eventType);
     }
   };
 
