@@ -1,12 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './CopyButton.css';
 
 export default function CopyButton({ content, title = 'Copy content', ariaLabel = title }) {
   const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+  }, []);
 
   const markCopied = () => {
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current);
+    }
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 2000);
+    resetTimerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      resetTimerRef.current = null;
+    }, 2000);
   };
 
   const handleCopy = async () => {

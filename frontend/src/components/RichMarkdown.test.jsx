@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RichMarkdown from './RichMarkdown';
 
 vi.mock('mermaid', () => ({
@@ -13,6 +13,10 @@ vi.mock('mermaid', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   navigator.clipboard.writeText.mockClear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('RichMarkdown', () => {
@@ -68,5 +72,18 @@ describe('RichMarkdown', () => {
     expect(screen.getByRole('button', { name: 'Copy source' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(screen.getByRole('dialog', { name: 'Mermaid diagram preview' })).toBeInTheDocument();
+  });
+
+  it('clears table copy feedback timers when unmounted', async () => {
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    const { unmount } = render(<RichMarkdown content={`| Name | Score |\n| --- | --- |\n| Alpha | 2 |`} />);
+
+    expect(await screen.findByText('Table')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy CSV' }));
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
   });
 });

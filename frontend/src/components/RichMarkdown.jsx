@@ -74,11 +74,41 @@ const mermaidCache = new Map();
 const compactContentCache = new Map();
 const markdownSegmentsCache = new Map();
 
-function remember(cache, key, value, maxEntries = 80) {
+function estimateCacheChars(value, depth = 0) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'string') return value.length;
+  if (typeof value === 'number' || typeof value === 'boolean') return 8;
+  if (depth > 3) return 32;
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + estimateCacheChars(item, depth + 1), 0);
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).reduce(
+      (total, [entryKey, entryValue]) => total + entryKey.length + estimateCacheChars(entryValue, depth + 1),
+      0
+    );
+  }
+  return 0;
+}
+
+function cacheChars(cache) {
+  let total = 0;
+  cache.forEach((value, key) => {
+    total += String(key).length + estimateCacheChars(value);
+  });
+  return total;
+}
+
+function remember(cache, key, value, limits = {}) {
+  const maxEntries = limits.maxEntries ?? 80;
+  const maxChars = limits.maxChars ?? 1_500_000;
   if (cache.has(key)) cache.delete(key);
   cache.set(key, value);
-  if (cache.size > maxEntries) {
-    cache.delete(cache.keys().next().value);
+
+  while (cache.size > maxEntries || cacheChars(cache) > maxChars) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
   }
 }
 
@@ -166,6 +196,11 @@ function stableHash(value) {
   return (hash >>> 0).toString(36);
 }
 
+function contentFingerprint(value) {
+  const source = String(value || '');
+  return `${source.length}:${stableHash(source)}`;
+}
+
 const copyText = async (content) => {
   try {
     await navigator.clipboard.writeText(content);
@@ -219,14 +254,37 @@ const textFromChildren = (children) => {
   return '';
 };
 
+function useTimedReset(initialValue) {
+  const [value, setValue] = useState(initialValue);
+  const timeoutRef = useRef(null);
+
+  useEffect(() => () => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+    }
+  }, []);
+
+  const setTemporarily = (nextValue, resetValue = initialValue, delay = 1600) => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+    }
+    setValue(nextValue);
+    timeoutRef.current = window.setTimeout(() => {
+      setValue(resetValue);
+      timeoutRef.current = null;
+    }, delay);
+  };
+
+  return [value, setTemporarily, setValue];
+}
+
 function CopyControl({ content, label = 'Copy' }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopiedTemporarily] = useTimedReset(false);
 
   const handleCopy = async () => {
     const ok = await copyText(content);
     if (!ok) return;
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
+    setCopiedTemporarily(true, false, 1600);
   };
 
   return (
@@ -255,7 +313,7 @@ function escapeHtml(value) {
 
 function useHighlightedCode(code, language, mode, enabled = true) {
   const fallback = useMemo(() => escapeHtml(code), [code]);
-  const cacheKey = useMemo(() => `${mode}:${language}:${code}`, [code, language, mode]);
+  const cacheKey = useMemo(() => `${mode}:${language}:${contentFingerprint(code)}`, [code, language, mode]);
   const cached = highlightCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
@@ -275,7 +333,7 @@ function useHighlightedCode(code, language, mode, enabled = true) {
         if (cancelled) return;
         const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
         const nextResult = { cacheKey, html: highlighted, state: 'highlighted' };
-        remember(highlightCache, cacheKey, nextResult);
+        remember(highlightCache, cacheKey, nextResult, { maxEntries: 80, maxChars: 4_000_000 });
         setResult(nextResult);
       })
       .catch(() => {
@@ -370,7 +428,7 @@ function PlainTextBlock({ code }) {
 }
 
 function useMermaidSvg(code, mode) {
-  const cacheKey = useMemo(() => `${mode}:${code}`, [code, mode]);
+  const cacheKey = useMemo(() => `${mode}:${contentFingerprint(code)}`, [code, mode]);
   const cached = mermaidCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
@@ -388,7 +446,7 @@ function useMermaidSvg(code, mode) {
       .then((rendered) => {
         if (!cancelled) {
           const nextResult = { cacheKey, svg: rendered.svg || '', error: '' };
-          remember(mermaidCache, cacheKey, nextResult, 40);
+          remember(mermaidCache, cacheKey, nextResult, { maxEntries: 40, maxChars: 3_000_000 });
           setResult(nextResult);
         }
       })
@@ -487,7 +545,7 @@ function MermaidBlock({ code, mode }) {
 }
 
 function useKatexHtml(expression, displayMode, mode) {
-  const cacheKey = useMemo(() => `${mode}:${displayMode}:${expression}`, [displayMode, expression, mode]);
+  const cacheKey = useMemo(() => `${mode}:${displayMode}:${contentFingerprint(expression)}`, [displayMode, expression, mode]);
   const cached = katexCache.get(cacheKey);
   const [result, setResult] = useState(null);
 
@@ -504,7 +562,7 @@ function useKatexHtml(expression, displayMode, mode) {
           cacheKey,
           html: katex.renderToString(expression, { throwOnError: false, displayMode }),
         };
-        remember(katexCache, cacheKey, nextResult, 160);
+        remember(katexCache, cacheKey, nextResult, { maxEntries: 160, maxChars: 1_000_000 });
         setResult(nextResult);
       })
       .catch(() => {
@@ -595,7 +653,7 @@ function InlineMathContainer({ as: Tag, children, mode, ...props }) {
 
 function MarkdownTable({ children }) {
   const tableRef = useRef(null);
-  const [copied, setCopied] = useState('');
+  const [copied, setCopiedTemporarily] = useTimedReset('');
   const [filter, setFilter] = useState('');
   const [sortConfig, setSortConfig] = useState({ column: '', direction: 'asc' });
   const [columnLabels, setColumnLabels] = useState([]);
@@ -626,8 +684,7 @@ function MarkdownTable({ children }) {
   const handleCopy = async (format) => {
     const ok = await copyText(tableAs(format));
     if (!ok) return;
-    setCopied(format);
-    window.setTimeout(() => setCopied(''), 1600);
+    setCopiedTemporarily(format, '', 1600);
   };
 
   const compareCells = (a, b, columnIndex) => {
@@ -738,7 +795,7 @@ function ImageRenderer(props) {
 
 function compactContent(content) {
   const source = String(content || '');
-  const cacheKey = `${source.length}:${stableHash(source)}`;
+  const cacheKey = contentFingerprint(source);
   const cached = compactContentCache.get(cacheKey);
   if (cached) return cached;
 
@@ -750,13 +807,13 @@ function compactContent(content) {
     .replace(/\s+/g, ' ')
     .trim();
   const compact = text.length > 420 ? `${text.slice(0, 420)}...` : text;
-  remember(compactContentCache, cacheKey, compact, 160);
+  remember(compactContentCache, cacheKey, compact, { maxEntries: 160, maxChars: 250_000 });
   return compact;
 }
 
 function splitBlockMath(content) {
   const source = String(content || '');
-  const cacheKey = `${source.length}:${stableHash(source)}`;
+  const cacheKey = contentFingerprint(source);
   const cached = markdownSegmentsCache.get(cacheKey);
   if (cached) return cached;
 
@@ -778,7 +835,7 @@ function splitBlockMath(content) {
   }
 
   const result = segments.length ? segments : [{ type: 'markdown', value: source }];
-  remember(markdownSegmentsCache, cacheKey, result, 160);
+  remember(markdownSegmentsCache, cacheKey, result, { maxEntries: 80, maxChars: 2_000_000 });
   return result;
 }
 

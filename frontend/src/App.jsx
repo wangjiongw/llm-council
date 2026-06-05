@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import LLMSettingsModal from './components/LLMSettingsModal';
@@ -34,6 +34,7 @@ function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) || 'light');
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)));
   const [pendingMessageJump, setPendingMessageJump] = useState(null);
+  const conversationDetailsRequestRef = useRef(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -69,12 +70,17 @@ function App() {
     })();
   }, []);
 
-  const loadConversationDetails = async (conversationId) => {
+  const loadConversationDetails = useCallback(async (conversationId) => {
+    const requestId = conversationDetailsRequestRef.current + 1;
+    conversationDetailsRequestRef.current = requestId;
+
+    const isCurrentRequest = () => conversationDetailsRequestRef.current === requestId;
+
     if (!conversationId) {
       setCurrentConversation(null);
       setCurrentContextAudit(null);
       setCurrentContextPolicy(null);
-      return;
+      return null;
     }
 
     try {
@@ -85,18 +91,23 @@ function App() {
           return null;
         }),
       ]);
+      if (!isCurrentRequest()) return null;
       setCurrentConversation(conv);
       setCurrentContextAudit(audit);
       setCurrentContextPolicy(audit?.context_policy || conv.context_policy || null);
+      return conv;
     } catch (error) {
-      console.error('Failed to load conversation:', error);
+      if (isCurrentRequest()) {
+        console.error('Failed to load conversation:', error);
+      }
+      return null;
     }
-  };
+  }, []);
 
   // Load conversation details when selected
   useEffect(() => {
     loadConversationDetails(currentConversationId);
-  }, [currentConversationId]);
+  }, [currentConversationId, loadConversationDetails]);
 
   const handleNewConversation = async () => {
     try {
