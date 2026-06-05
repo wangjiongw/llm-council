@@ -2,9 +2,9 @@
 
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 import uuid
 import json
 import asyncio
@@ -107,6 +107,25 @@ class UpdateConversationRequest(BaseModel):
     tags: List[str] | None = None
 
 
+class BatchConversationRequest(BaseModel):
+    """Batch metadata operation for selected conversations."""
+    conversation_ids: List[str]
+    updates: UpdateConversationRequest
+    tag_mode: Literal["replace", "add", "remove"] = "replace"
+
+
+class TagColorRequest(BaseModel):
+    """Request to persist a color for one conversation tag."""
+    tag: str
+    color: str
+
+
+class SavedConversationViewRequest(BaseModel):
+    """Request to save a reusable sidebar filter view."""
+    name: str
+    filters: Dict[str, Any] = Field(default_factory=dict)
+
+
 class UpdateFileQueueRequest(BaseModel):
     """Request to replace a conversation's pending file queue."""
     files: List[Dict[str, Any]]
@@ -139,6 +158,7 @@ class ConversationMetadata(BaseModel):
     updated_at: str | None = None
     title: str
     message_count: int
+    turn_count: int = 0
     favorite: bool = False
     archived: bool = False
     pinned: bool = False
@@ -1022,6 +1042,58 @@ async def search_conversation_history(q: str = "", limit: int = 20):
     return {"query": query, "results": storage.search_conversations(query, limit=limit)}
 
 
+@app.get("/api/conversations/management")
+async def get_conversation_management():
+    return storage.get_conversation_management()
+
+
+@app.post("/api/conversations/tag-colors")
+async def update_conversation_tag_color(request: TagColorRequest):
+    try:
+        return storage.update_tag_color(request.tag, request.color)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/conversations/saved-views")
+async def save_conversation_view(request: SavedConversationViewRequest):
+    try:
+        return storage.save_conversation_view(request.name, request.filters)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/conversations/saved-views/{view_id}")
+async def delete_conversation_view(view_id: str):
+    try:
+        return storage.delete_conversation_view(view_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.patch("/api/conversations/batch")
+async def batch_update_conversations(request: BatchConversationRequest):
+    updates = request.updates.model_dump(exclude_unset=True)
+    if not request.conversation_ids:
+        raise HTTPException(status_code=400, detail="conversation_ids cannot be empty")
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+
+    title = updates.get("title")
+    if title is not None:
+        if not title.strip():
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        updates["title"] = title.strip()[:100]
+
+    if updates.get("tags") is not None and not isinstance(updates["tags"], list):
+        raise HTTPException(status_code=400, detail="Tags must be a list")
+
+    try:
+        return {"conversations": storage.batch_update_conversations(request.conversation_ids, updates, tag_mode=request.tag_mode)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.patch("/api/conversations/{conversation_id}", response_model=Conversation)
 async def update_conversation(conversation_id: str, request: UpdateConversationRequest):
     """Update title, favorite, archive, pin, or tags for one conversation."""
@@ -1050,6 +1122,52 @@ async def update_conversation(conversation_id: str, request: UpdateConversationR
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update conversation: {str(e)}")
+
+
+@app.get("/api/conversations/{conversation_id}/export")
+async def export_conversation(conversation_id: str, format: Literal["markdown", "json"] = "markdown"):
+    try:
+        exported, filename, media_type = storage.export_conversation(conversation_id, format)
+    except ValueError as e:
+        message = str(e)
+        status_code = 404 if "not found" in message.lower() else 400
+        raise HTTPException(status_code=status_code, detail=message)
+
+    return Response(
+        content=exported,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/conversations/{conversation_id}/title-suggestions")
+async def suggest_conversation_titles(conversation_id: str, limit: int = 4):
+    limit = max(1, min(8, int(limit or 4)))
+    try:
+        local_suggestions = storage.suggest_conversation_titles(conversation_id, limit)
+        title_source = storage.conversation_title_generation_source(conversation_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    suggestions = []
+    source = "local"
+    if title_source:
+        try:
+            generated_title = await generate_conversation_title(title_source)
+        except Exception as e:
+            print(f"Title generation failed, falling back to local suggestions: {e}")
+            generated_title = ""
+        if generated_title and generated_title != "New Conversation":
+            suggestions.append(generated_title)
+            source = "llm"
+
+    for title in local_suggestions:
+        if title and title.casefold() not in {item.casefold() for item in suggestions}:
+            suggestions.append(title)
+        if len(suggestions) >= limit:
+            break
+
+    return {"suggestions": suggestions[:limit], "source": source}
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)

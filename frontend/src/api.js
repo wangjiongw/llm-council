@@ -381,6 +381,123 @@ export const api = {
   },
 
   /**
+   * Get saved conversation-management preferences.
+   */
+  async getConversationManagement() {
+    const response = await fetch(`${API_BASE}/api/conversations/management`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to load conversation management');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update metadata for multiple conversations at once.
+   */
+  async batchUpdateConversations(conversationIds, updates, tagMode = 'replace') {
+    const response = await fetch(`${API_BASE}/api/conversations/batch`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ conversation_ids: conversationIds, updates, tag_mode: tagMode }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update selected conversations');
+    }
+    return response.json();
+  },
+
+  /**
+   * Persist a color for one conversation tag.
+   */
+  async updateTagColor(tag, color) {
+    const response = await fetch(`${API_BASE}/api/conversations/tag-colors`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ tag, color }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to update tag color');
+    }
+    return response.json();
+  },
+
+  /**
+   * Save or replace a reusable conversation sidebar view.
+   */
+  async saveConversationView(name, filters) {
+    const response = await fetch(`${API_BASE}/api/conversations/saved-views`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, filters }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to save conversation view');
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete a saved conversation sidebar view.
+   */
+  async deleteConversationView(viewId) {
+    const response = await fetch(`${API_BASE}/api/conversations/saved-views/${viewId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to delete conversation view');
+    }
+    return response.json();
+  },
+
+  /**
+   * Request local title suggestions from the stored conversation content.
+   */
+  async suggestConversationTitles(conversationId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/title-suggestions`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to suggest titles');
+    }
+    return response.json();
+  },
+
+  /**
+   * Download a conversation export.
+   */
+  async exportConversation(conversationId, format = 'markdown') {
+    const params = new URLSearchParams({ format });
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/export?${params.toString()}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to export conversation');
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = filenameMatch?.[1] || `conversation-${conversationId}.${format === 'json' ? 'json' : 'md'}`;
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return { filename };
+  },
+  /**
    * Update conversation title.
    * @param {string} conversationId - The conversation ID
    * @param {string} title - The new title

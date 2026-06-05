@@ -155,6 +155,20 @@ def get_conversation_path(conversation_id: str) -> str:
 
 MAX_CONVERSATION_TAGS = 20
 MAX_CONVERSATION_TAG_LENGTH = 32
+CONVERSATION_MANAGEMENT_FILENAME = "_conversation_management.json"
+MAX_SAVED_VIEWS = 24
+MAX_SAVED_VIEW_NAME_LENGTH = 48
+DEFAULT_TAG_COLORS = [
+    "#2563eb",
+    "#16a34a",
+    "#d97706",
+    "#dc2626",
+    "#7c3aed",
+    "#0891b2",
+    "#be123c",
+    "#4f46e5",
+]
+TAG_COLOR_PATTERN = "0123456789abcdefABCDEF"
 
 
 def _normalize_conversation_tags(tags: Any) -> List[str]:
@@ -178,6 +192,92 @@ def _normalize_conversation_tags(tags: Any) -> List[str]:
     return normalized
 
 
+def _normalize_single_tag(tag: Any) -> str:
+    tags = _normalize_conversation_tags([tag])
+    return tags[0] if tags else ""
+
+
+def _tag_color_for(tag: str) -> str:
+    if not tag:
+        return DEFAULT_TAG_COLORS[0]
+    index = sum(ord(ch) for ch in tag.casefold()) % len(DEFAULT_TAG_COLORS)
+    return DEFAULT_TAG_COLORS[index]
+
+
+def _normalize_tag_color(color: Any) -> str:
+    clean = str(color or "").strip()
+    if len(clean) == 7 and clean.startswith("#") and all(ch in TAG_COLOR_PATTERN for ch in clean[1:]):
+        return clean.lower()
+    raise ValueError("Tag color must be a hex color like #2563eb")
+
+
+def _conversation_management_path() -> str:
+    ensure_data_dir()
+    return os.path.join(DATA_DIR, CONVERSATION_MANAGEMENT_FILENAME)
+
+
+def _normalize_saved_view(view: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(view, dict):
+        return None
+    name = str(view.get("name") or "").strip()[:MAX_SAVED_VIEW_NAME_LENGTH]
+    if not name:
+        return None
+    filters = view.get("filters") if isinstance(view.get("filters"), dict) else {}
+    allowed_filter_keys = {
+        "viewMode",
+        "favoriteOnly",
+        "tagFilter",
+        "historySearchQuery",
+        "historySearchSource",
+        "historySearchMode",
+        "searchFlags",
+    }
+    normalized_filters = {key: copy.deepcopy(value) for key, value in filters.items() if key in allowed_filter_keys}
+    if isinstance(normalized_filters.get("searchFlags"), dict):
+        allowed_flags = {"hasFiles", "failedOnly", "pinnedOnly", "contextExcludedOnly"}
+        normalized_filters["searchFlags"] = {
+            key: bool(value) for key, value in normalized_filters["searchFlags"].items() if key in allowed_flags
+        }
+    return {
+        "id": str(view.get("id") or uuid.uuid4()),
+        "name": name,
+        "filters": normalized_filters,
+        "created_at": str(view.get("created_at") or datetime.utcnow().isoformat()),
+        "updated_at": str(view.get("updated_at") or view.get("created_at") or datetime.utcnow().isoformat()),
+    }
+
+
+def _normalize_conversation_management(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    source = payload or {}
+    tag_colors = {}
+    if isinstance(source.get("tag_colors"), dict):
+        for raw_tag, raw_color in source["tag_colors"].items():
+            tag = _normalize_single_tag(raw_tag)
+            if not tag:
+                continue
+            try:
+                tag_colors[tag] = _normalize_tag_color(raw_color)
+            except ValueError:
+                tag_colors[tag] = _tag_color_for(tag)
+
+    saved_views = []
+    seen_view_names = set()
+    if isinstance(source.get("saved_views"), list):
+        for view in source["saved_views"]:
+            normalized = _normalize_saved_view(view)
+            if not normalized:
+                continue
+            key = normalized["name"].casefold()
+            if key in seen_view_names:
+                continue
+            seen_view_names.add(key)
+            saved_views.append(normalized)
+            if len(saved_views) >= MAX_SAVED_VIEWS:
+                break
+
+    return {"tag_colors": tag_colors, "saved_views": saved_views}
+
+
 def _touch_conversation(conversation: Dict[str, Any], when: Optional[str] = None) -> str:
     timestamp = when or datetime.utcnow().isoformat()
     conversation["updated_at"] = timestamp
@@ -195,14 +295,25 @@ def _ensure_conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any
     return conversation
 
 
+def _conversation_turn_count(messages: Any) -> int:
+    if not isinstance(messages, list):
+        return 0
+    user_turns = sum(1 for message in messages if isinstance(message, dict) and message.get("role") == "user")
+    if user_turns > 0:
+        return user_turns
+    return (len(messages) + 1) // 2
+
+
 def _conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
     normalized = _ensure_conversation_metadata(dict(conversation))
+    messages = normalized.get("messages") or []
     return {
         "id": normalized["id"],
         "created_at": normalized["created_at"],
         "updated_at": normalized["updated_at"],
         "title": normalized.get("title", "New Conversation"),
-        "message_count": len(normalized.get("messages") or []),
+        "message_count": len(messages),
+        "turn_count": _conversation_turn_count(messages),
         "favorite": normalized["favorite"],
         "archived": normalized["archived"],
         "pinned": normalized["pinned"],
@@ -278,6 +389,52 @@ def save_conversation(conversation: Dict[str, Any]):
         _ensure_conversation_metadata(conversation)
         path = get_conversation_path(conversation_id)
         _write_json_atomic(path, conversation)
+
+
+def get_conversation_management() -> Dict[str, Any]:
+    path = _conversation_management_path()
+    if not os.path.exists(path):
+        return _normalize_conversation_management()
+    with open(path, 'r') as f:
+        return _normalize_conversation_management(json.load(f))
+
+
+def save_conversation_management(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_conversation_management(payload)
+    _write_json_atomic(_conversation_management_path(), normalized)
+    return normalized
+
+
+def update_tag_color(tag: str, color: str) -> Dict[str, Any]:
+    clean_tag = _normalize_single_tag(tag)
+    if not clean_tag:
+        raise ValueError("Tag is required")
+    clean_color = _normalize_tag_color(color)
+    management = get_conversation_management()
+    management["tag_colors"][clean_tag] = clean_color
+    return save_conversation_management(management)
+
+
+def save_conversation_view(name: str, filters: Dict[str, Any]) -> Dict[str, Any]:
+    management = get_conversation_management()
+    now = datetime.utcnow().isoformat()
+    next_view = _normalize_saved_view({"name": name, "filters": filters, "created_at": now, "updated_at": now})
+    if not next_view:
+        raise ValueError("Saved view name is required")
+
+    views = [view for view in management["saved_views"] if view["name"].casefold() != next_view["name"].casefold()]
+    views.insert(0, next_view)
+    management["saved_views"] = views[:MAX_SAVED_VIEWS]
+    return save_conversation_management(management)
+
+
+def delete_conversation_view(view_id: str) -> Dict[str, Any]:
+    management = get_conversation_management()
+    original_count = len(management["saved_views"])
+    management["saved_views"] = [view for view in management["saved_views"] if view.get("id") != view_id]
+    if len(management["saved_views"]) == original_count:
+        raise ValueError("Saved view not found")
+    return save_conversation_management(management)
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -1146,27 +1303,194 @@ def get_context_audit(conversation_id: str) -> Dict[str, Any]:
     }
 
 
+def _apply_conversation_metadata_updates(conversation: Dict[str, Any], updates: Dict[str, Any], *, tag_mode: str = "replace") -> None:
+    allowed_keys = {"title", "favorite", "archived", "pinned", "tags"}
+    for key, value in updates.items():
+        if key not in allowed_keys or value is None:
+            continue
+        if key == "title":
+            conversation["title"] = str(value).strip()
+        elif key == "tags":
+            incoming_tags = _normalize_conversation_tags(value)
+            if tag_mode == "add":
+                conversation["tags"] = _normalize_conversation_tags([*(conversation.get("tags") or []), *incoming_tags])
+            elif tag_mode == "remove":
+                remove_keys = {tag.casefold() for tag in incoming_tags}
+                conversation["tags"] = [tag for tag in _normalize_conversation_tags(conversation.get("tags")) if tag.casefold() not in remove_keys]
+            else:
+                conversation["tags"] = incoming_tags
+        else:
+            conversation[key] = bool(value)
+
+
 def update_conversation_metadata(conversation_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     """Update list-view metadata for a conversation."""
-    allowed_keys = {"title", "favorite", "archived", "pinned", "tags"}
     with _conversation_lock(conversation_id):
         conversation = get_conversation(conversation_id)
         if conversation is None:
             raise ValueError(f"Conversation {conversation_id} not found")
 
-        for key, value in updates.items():
-            if key not in allowed_keys or value is None:
-                continue
-            if key == "title":
-                conversation["title"] = str(value).strip()
-            elif key == "tags":
-                conversation["tags"] = _normalize_conversation_tags(value)
-            else:
-                conversation[key] = bool(value)
+        _apply_conversation_metadata_updates(conversation, updates)
 
         _touch_conversation(conversation)
         save_conversation(conversation)
         return conversation
+
+
+def batch_update_conversations(conversation_ids: List[str], updates: Dict[str, Any], *, tag_mode: str = "replace") -> List[Dict[str, Any]]:
+    if tag_mode not in {"replace", "add", "remove"}:
+        raise ValueError("tag_mode must be replace, add, or remove")
+
+    conversations = []
+    missing = []
+    for conversation_id in conversation_ids:
+        with _conversation_lock(conversation_id):
+            conversation = get_conversation(conversation_id)
+            if conversation is None:
+                missing.append(conversation_id)
+            else:
+                conversations.append(conversation)
+
+    if missing:
+        raise ValueError(f"Conversation(s) not found: {', '.join(missing)}")
+
+    now = datetime.utcnow().isoformat()
+    updated = []
+    for conversation in conversations:
+        conversation_id = conversation["id"]
+        with _conversation_lock(conversation_id):
+            _apply_conversation_metadata_updates(conversation, updates, tag_mode=tag_mode)
+            _touch_conversation(conversation, now)
+            save_conversation(conversation)
+            updated.append(conversation)
+    return updated
+
+
+def _message_export_text(message: Dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(item.get("text") or "") for item in content if isinstance(item, dict) and item.get("type") == "text").strip()
+    if message.get("stage3", {}).get("response"):
+        return str(message["stage3"]["response"])
+    return ""
+
+
+def export_conversation(conversation_id: str, export_format: str = "markdown") -> tuple[str, str, str]:
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    title = str(conversation.get("title") or "Conversation").strip() or "Conversation"
+    safe_title = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in title).strip("-") or "conversation"
+    if export_format == "json":
+        return json.dumps(conversation, indent=2, ensure_ascii=False), f"{safe_title}.json", "application/json; charset=utf-8"
+
+    lines = [f"# {title}", ""]
+    metadata = _conversation_metadata(conversation)
+    lines.extend([
+        f"- ID: {metadata['id']}",
+        f"- Created: {metadata['created_at']}",
+        f"- Updated: {metadata['updated_at']}",
+        f"- Messages: {metadata['message_count']}",
+        f"- Tags: {', '.join(metadata['tags']) if metadata['tags'] else 'none'}",
+        "",
+    ])
+    for index, message in enumerate(conversation.get("messages") or []):
+        role = message.get("role") or "message"
+        lines.append(f"## {index + 1}. {role.title()}")
+        lines.append("")
+        text = _message_export_text(message)
+        lines.append(text or "[No text content]")
+        if message.get("files"):
+            lines.append("")
+            lines.append("Files:")
+            for file_info in message.get("files") or []:
+                lines.append(f"- {file_info.get('name') or file_info.get('filename') or 'file'}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n", f"{safe_title}.md", "text/markdown; charset=utf-8"
+
+
+def _compact_title_candidate(value: str, *, max_words: int = 8, max_chars: int = 42) -> str:
+    clean = " ".join(str(value or "").split())
+    if not clean:
+        return ""
+
+    for delimiter in ("。", "？", "！", "?", "!", "；", ";"):
+        if delimiter in clean:
+            clean = clean.split(delimiter, 1)[0].strip() or clean
+            break
+
+    words = [word.strip(" .,;:!?()[]{}\"'") for word in clean.split()]
+    words = [word for word in words if word]
+    if len(words) > 1:
+        candidate = " ".join(words[:max_words]).strip()
+    else:
+        candidate = clean
+
+    if len(candidate) > max_chars:
+        candidate = candidate[:max_chars].rstrip() + "..."
+    return candidate
+
+
+def conversation_title_generation_source(conversation_id: str, max_chars: int = 2400) -> str:
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    lines = []
+    title = str(conversation.get("title") or "").strip()
+    if title and title != "New Conversation":
+        lines.append(f"Current title: {title}")
+    tags = _normalize_conversation_tags(conversation.get("tags"))
+    if tags:
+        lines.append(f"Tags: {', '.join(tags)}")
+
+    lines.append("Conversation transcript:")
+    for message in conversation.get("messages") or []:
+        role = str(message.get("role") or "message").title()
+        text = " ".join(_message_export_text(message).split())
+        if not text:
+            continue
+        lines.append(f"{role}: {_truncate_text(text, 700, 'title source')}")
+        joined = "\n".join(lines)
+        if len(joined) >= max_chars:
+            return joined[:max_chars].rstrip()
+    return "\n".join(lines).strip()
+
+
+def suggest_conversation_titles(conversation_id: str, limit: int = 4) -> List[str]:
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    messages = conversation.get("messages") or []
+    first_user = next((message for message in messages if message.get("role") == "user"), {})
+    first_text = _message_export_text(first_user)
+    current_title = str(conversation.get("title") or "").strip()
+    tags = _normalize_conversation_tags(conversation.get("tags"))
+
+    base = _compact_title_candidate(first_text) or _compact_title_candidate(current_title) or "New Conversation"
+    candidates = [base]
+    if tags:
+        candidates.append(f"{tags[0]}: {base}")
+    if len(messages) > 2:
+        candidates.append(f"{base} ({len(messages)} messages)")
+    if current_title and current_title != "New Conversation":
+        candidates.append(_compact_title_candidate(current_title, max_chars=50))
+
+    deduped = []
+    seen = set()
+    for title in candidates:
+        clean = title.strip()[:60].strip()
+        key = clean.casefold()
+        if clean and key not in seen:
+            seen.add(key)
+            deduped.append(clean)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 def update_conversation_title(conversation_id: str, title: str):

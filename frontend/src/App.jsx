@@ -19,6 +19,7 @@ const clampSidebarWidth = (value) => {
 
 function App() {
   const [conversations, setConversations] = useState([]);
+  const [conversationManagement, setConversationManagement] = useState({ tag_colors: {}, saved_views: [] });
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [currentContextAudit, setCurrentContextAudit] = useState(null);
@@ -52,8 +53,15 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const convs = await api.listConversations();
+        const [convs, management] = await Promise.all([
+          api.listConversations(),
+          api.getConversationManagement().catch((error) => {
+            console.warn('Failed to load conversation management:', error);
+            return { tag_colors: {}, saved_views: [] };
+          }),
+        ]);
         setConversations(convs);
+        setConversationManagement(management);
       } catch (error) {
         console.error('Failed to load conversations:', error);
       }
@@ -148,6 +156,7 @@ function App() {
     created_at: conversation.created_at,
     updated_at: conversation.updated_at || conversation.created_at,
     message_count: conversation.messages?.length ?? fallback.message_count ?? 0,
+    turn_count: conversation.turn_count ?? (conversation.messages ? conversation.messages.filter((message) => message?.role === 'user').length : fallback.turn_count ?? Math.ceil((fallback.message_count ?? 0) / 2)),
     title: conversation.title || fallback.title || 'New Conversation',
     favorite: Boolean(conversation.favorite),
     archived: Boolean(conversation.archived),
@@ -186,6 +195,73 @@ function App() {
 
   const handleUpdateTitle = async (conversationId, newTitle) => {
     await handleUpdateConversationMetadata(conversationId, { title: newTitle });
+  };
+
+  const handleBatchUpdateConversations = async (conversationIds, updates, tagMode = 'replace') => {
+    try {
+      const response = await api.batchUpdateConversations(conversationIds, updates, tagMode);
+      (response.conversations || []).forEach((conversation) => mergeConversationMetadata(conversation));
+      await loadConversations();
+      if (conversationIds.includes(currentConversationId)) {
+        await loadConversationDetails(currentConversationId);
+      }
+      return response;
+    } catch (error) {
+      console.error('Failed to update selected conversations:', error);
+      alert('Failed to update selected conversations. Please try again.');
+      throw error;
+    }
+  };
+
+  const handleUpdateTagColor = async (tag, color) => {
+    try {
+      const management = await api.updateTagColor(tag, color);
+      setConversationManagement(management);
+      return management;
+    } catch (error) {
+      console.error('Failed to update tag color:', error);
+      alert('Failed to update tag color. Please try again.');
+      throw error;
+    }
+  };
+
+  const handleSaveConversationView = async (name, filters) => {
+    try {
+      const management = await api.saveConversationView(name, filters);
+      setConversationManagement(management);
+      return management;
+    } catch (error) {
+      console.error('Failed to save conversation view:', error);
+      alert('Failed to save view. Please try again.');
+      throw error;
+    }
+  };
+
+  const handleDeleteConversationView = async (viewId) => {
+    try {
+      const management = await api.deleteConversationView(viewId);
+      setConversationManagement(management);
+      return management;
+    } catch (error) {
+      console.error('Failed to delete conversation view:', error);
+      alert('Failed to delete view. Please try again.');
+      throw error;
+    }
+  };
+
+  const handleSuggestConversationTitles = async (conversationId) => {
+    const response = await api.suggestConversationTitles(conversationId);
+    return response.suggestions || [];
+  };
+
+  const handleExportConversation = async (conversationId, format = 'markdown') => {
+    try {
+      return await api.exportConversation(conversationId, format);
+    } catch (error) {
+      console.error('Failed to export conversation:', error);
+      alert('Failed to export conversation. Please try again.');
+      throw error;
+    }
   };
 
   const handleUpdateContextPolicy = async (policyUpdates) => {
@@ -991,6 +1067,13 @@ function App() {
         onNewConversation={handleNewConversation}
         onUpdateTitle={handleUpdateTitle}
         onUpdateMetadata={handleUpdateConversationMetadata}
+        conversationManagement={conversationManagement}
+        onBatchUpdateConversations={handleBatchUpdateConversations}
+        onUpdateTagColor={handleUpdateTagColor}
+        onSaveView={handleSaveConversationView}
+        onDeleteView={handleDeleteConversationView}
+        onSuggestTitle={handleSuggestConversationTitles}
+        onExportConversation={handleExportConversation}
         onDeleteConversation={handleDeleteConversation}
         onSearchConversationHistory={handleSearchConversationHistory}
         onSelectSearchResult={handleSelectSearchResult}

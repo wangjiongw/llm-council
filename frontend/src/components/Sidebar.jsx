@@ -18,6 +18,14 @@ const DEFAULT_SIDEBAR_STATE = {
   },
 };
 
+const DEFAULT_TAG_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#be123c', '#4f46e5'];
+
+const fallbackTagColor = (tag) => {
+  const source = String(tag || '').toLowerCase();
+  const index = [...source].reduce((sum, char) => sum + char.charCodeAt(0), 0) % DEFAULT_TAG_COLORS.length;
+  return DEFAULT_TAG_COLORS[index];
+};
+
 const readSidebarState = () => {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(SIDEBAR_STATE_STORAGE_KEY) || '{}');
@@ -59,6 +67,20 @@ const groupConversationDate = (value) => {
   if (dayDelta < 7) return 'Previous 7 days';
   if (dayDelta < 30) return 'Previous 30 days';
   return 'Older';
+};
+
+const conversationTurnCount = (conversation) => {
+  const explicitTurnCount = Number(conversation?.turn_count);
+  if (Number.isFinite(explicitTurnCount) && explicitTurnCount >= 0) {
+    return explicitTurnCount;
+  }
+  const messageCount = Number(conversation?.message_count) || 0;
+  return Math.ceil(messageCount / 2);
+};
+
+const formatTurnCount = (conversation) => {
+  const turns = conversationTurnCount(conversation);
+  return `${turns} turn${turns === 1 ? '' : 's'}`;
 };
 
 const sortConversations = (conversations) => [...conversations].sort((a, b) => {
@@ -181,6 +203,13 @@ export default function Sidebar({
   onNewConversation,
   onUpdateTitle,
   onUpdateMetadata,
+  conversationManagement = { tag_colors: {}, saved_views: [] },
+  onBatchUpdateConversations,
+  onUpdateTagColor,
+  onSaveView,
+  onDeleteView,
+  onSuggestTitle,
+  onExportConversation,
   onDeleteConversation,
   onSearchConversationHistory,
   onSelectSearchResult,
@@ -211,6 +240,12 @@ export default function Sidebar({
   const [historySearchLoading, setHistorySearchLoading] = useState(false);
   const [historySearchError, setHistorySearchError] = useState('');
   const [isResizing, setIsResizing] = useState(false);
+  const [selectedConversationIds, setSelectedConversationIds] = useState(() => new Set());
+  const [batchTagInput, setBatchTagInput] = useState('');
+  const [savedViewName, setSavedViewName] = useState('');
+  const [activeSavedViewId, setActiveSavedViewId] = useState('');
+  const [titleSuggestions, setTitleSuggestions] = useState({});
+  const [titleSuggestionLoadingId, setTitleSuggestionLoadingId] = useState(null);
 
   const allTags = useMemo(() => {
     const tags = new Set();
@@ -219,6 +254,20 @@ export default function Sidebar({
     });
     return [...tags].sort((a, b) => a.localeCompare(b));
   }, [conversations]);
+
+  const tagColors = conversationManagement?.tag_colors || {};
+  const savedViews = conversationManagement?.saved_views || [];
+  const tagColorFor = (tag) => tagColors[tag] || fallbackTagColor(tag);
+
+  const currentFilters = useMemo(() => ({
+    viewMode,
+    favoriteOnly,
+    tagFilter,
+    historySearchQuery,
+    historySearchSource,
+    historySearchMode,
+    searchFlags,
+  }), [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, searchFlags, tagFilter, viewMode]);
 
   const visibleConversations = useMemo(() => {
     return conversations.filter((conversation) => {
@@ -394,6 +443,93 @@ export default function Sidebar({
     setSearchFlags(DEFAULT_SIDEBAR_STATE.searchFlags);
   };
 
+  const handleApplySavedView = (view) => {
+    if (!view) return;
+    const filters = view.filters || {};
+    setActiveSavedViewId(view.id || '');
+    setViewMode(filters.viewMode === 'archived' ? 'archived' : 'active');
+    setFavoriteOnly(Boolean(filters.favoriteOnly));
+    setTagFilter(filters.tagFilter || '');
+    setHistorySearchQuery(filters.historySearchQuery || '');
+    setHistorySearchSource(filters.historySearchSource || 'all');
+    setHistorySearchMode(filters.historySearchMode || 'all');
+    setSearchFlags({
+      ...DEFAULT_SIDEBAR_STATE.searchFlags,
+      ...(filters.searchFlags || {}),
+    });
+  };
+
+  const handleSaveView = async () => {
+    const name = savedViewName.trim();
+    if (!name || !onSaveView) return;
+    const management = await onSaveView(name, currentFilters);
+    const nextView = (management?.saved_views || []).find((view) => view.name.toLowerCase() === name.toLowerCase());
+    setActiveSavedViewId(nextView?.id || '');
+    setSavedViewName('');
+  };
+
+  const handleDeleteView = async () => {
+    if (!activeSavedViewId || !onDeleteView) return;
+    await onDeleteView(activeSavedViewId);
+    setActiveSavedViewId('');
+  };
+
+  const toggleConversationSelection = (event, conversationId) => {
+    event.stopPropagation();
+    setSelectedConversationIds((current) => {
+      const next = new Set(current);
+      if (next.has(conversationId)) {
+        next.delete(conversationId);
+      } else {
+        next.add(conversationId);
+      }
+      return next;
+    });
+  };
+
+  const selectedConversationList = () => Array.from(selectedConversationIds);
+
+  const handleBatchUpdate = async (updates, tagMode = 'replace') => {
+    const ids = selectedConversationList();
+    if (!ids.length || !onBatchUpdateConversations) return;
+    await onBatchUpdateConversations(ids, updates, tagMode);
+    if (!updates.tags) {
+      setSelectedConversationIds(new Set());
+    }
+  };
+
+  const handleBatchTags = async (tagMode) => {
+    const tags = parseTags(batchTagInput);
+    if (!tags.length) return;
+    await handleBatchUpdate({ tags }, tagMode);
+    setBatchTagInput('');
+  };
+
+  const handleSuggestTitle = async (event, conv) => {
+    event.stopPropagation();
+    if (!onSuggestTitle) return;
+    setTitleSuggestionLoadingId(conv.id);
+    try {
+      const suggestions = await onSuggestTitle(conv.id);
+      setTitleSuggestions((current) => ({ ...current, [conv.id]: suggestions }));
+      const currentTitle = (conv.title || 'New Conversation').trim();
+      const nextTitle = (suggestions || [])
+        .map((title) => String(title || '').trim())
+        .find((title) => title && title !== currentTitle);
+      if (nextTitle && onUpdateTitle) {
+        await onUpdateTitle(conv.id, nextTitle);
+      }
+    } finally {
+      setTitleSuggestionLoadingId(null);
+    }
+  };
+
+  const handleUseTitleSuggestion = async (event, convId, title) => {
+    event.stopPropagation();
+    await onUpdateTitle(convId, title);
+    setTitleSuggestions((current) => ({ ...current, [convId]: [] }));
+  };
+
   const handleMetadataClick = async (event, conv, updates) => {
     event.stopPropagation();
     await onUpdateMetadata(conv.id, updates);
@@ -543,6 +679,52 @@ export default function Sidebar({
             ))}
           </select>
         )}
+        <div className="saved-view-controls" aria-label="Saved conversation views controls">
+          <select
+            className="saved-view-select"
+            value={activeSavedViewId}
+            onChange={(event) => {
+              const view = savedViews.find((item) => item.id === event.target.value);
+              if (view) {
+                handleApplySavedView(view);
+              } else {
+                setActiveSavedViewId('');
+              }
+            }}
+            aria-label="Saved conversation views"
+          >
+            <option value="">Saved views</option>
+            {savedViews.map((view) => (
+              <option value={view.id} key={view.id}>{view.name}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={savedViewName}
+            onChange={(event) => setSavedViewName(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') handleSaveView(); }}
+            placeholder="View name"
+            aria-label="Saved view name"
+            maxLength={48}
+          />
+          <button type="button" onClick={handleSaveView} disabled={!savedViewName.trim() || !onSaveView}>Save</button>
+          <button type="button" onClick={handleDeleteView} disabled={!activeSavedViewId || !onDeleteView}>Del</button>
+        </div>
+        {allTags.length > 0 && (
+          <div className="tag-color-row" aria-label="Tag colors">
+            {allTags.map((tag) => (
+              <label className="tag-color-control" key={tag} title={`Color for ${tag}`}>
+                <span style={{ '--tag-color': tagColorFor(tag) }}>{tag}</span>
+                <input
+                  type="color"
+                  value={tagColorFor(tag)}
+                  onChange={(event) => onUpdateTagColor?.(tag, event.target.value)}
+                  aria-label={`Color for ${tag}`}
+                />
+              </label>
+            ))}
+          </div>
+        )}
         <div className="sidebar-search" role="search">
           <input
             type="search"
@@ -599,6 +781,30 @@ export default function Sidebar({
           </div>
         )}
       </div>
+
+      {selectedConversationIds.size > 0 && (
+        <div className="conversation-bulk-toolbar" aria-label="Selected conversation actions">
+          <div className="bulk-toolbar-row">
+            <strong>{selectedConversationIds.size} selected</strong>
+            <button type="button" onClick={() => handleBatchUpdate({ favorite: true })}>Favorite</button>
+            <button type="button" onClick={() => handleBatchUpdate({ favorite: false })}>Unfavorite</button>
+            <button type="button" onClick={() => handleBatchUpdate({ archived: true })}>Archive</button>
+            <button type="button" onClick={() => handleBatchUpdate({ archived: false })}>Restore</button>
+            <button type="button" onClick={() => setSelectedConversationIds(new Set())}>Clear</button>
+          </div>
+          <div className="bulk-toolbar-row">
+            <input
+              type="text"
+              value={batchTagInput}
+              onChange={(event) => setBatchTagInput(event.target.value)}
+              placeholder="tag-a, tag-b"
+              aria-label="Batch tags"
+            />
+            <button type="button" onClick={() => handleBatchTags('add')} disabled={!batchTagInput.trim()}>Add tags</button>
+            <button type="button" onClick={() => handleBatchTags('remove')} disabled={!batchTagInput.trim()}>Remove tags</button>
+          </div>
+        </div>
+      )}
 
       <div className="conversation-list">
         {historySearchQuery.trim() ? (
@@ -740,11 +946,21 @@ export default function Sidebar({
                       </div>
                     ) : (
                       <>
-                        <div className="conversation-title-row">
-                          <div className="conversation-title">
-                            {conv.title || 'New Conversation'}
+                        <div className="conversation-card-layout">
+                          <div className="conversation-title-row">
+                            <label className="conversation-select" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={selectedConversationIds.has(conv.id)}
+                                onChange={(e) => toggleConversationSelection(e, conv.id)}
+                                aria-label={`Select ${conv.title || 'New Conversation'}`}
+                              />
+                            </label>
+                            <div className="conversation-title" title={conv.title || 'New Conversation'}>
+                              {conv.title || 'New Conversation'}
+                            </div>
                           </div>
-                          <div className="conversation-actions">
+                          <div className="conversation-actions" aria-label="Conversation actions">
                             <button
                               className={`conversation-action-btn ${conv.favorite ? 'active' : ''}`}
                               onClick={(e) => handleMetadataClick(e, conv, { favorite: !conv.favorite })}
@@ -758,6 +974,25 @@ export default function Sidebar({
                               title={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
                             >
                               ⬆
+                            </button>
+                            <button
+                              className="title-edit-btn"
+                              onClick={(e) => handleSuggestTitle(e, conv)}
+                              title={titleSuggestionLoadingId === conv.id ? 'Generating title...' : 'Auto title with LLM'}
+                              aria-label="Auto title with LLM"
+                              disabled={titleSuggestionLoadingId === conv.id}
+                            >
+                              {titleSuggestionLoadingId === conv.id ? '...' : 'AI'}
+                            </button>
+                            <button
+                              className="title-edit-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onExportConversation?.(conv.id, 'markdown');
+                              }}
+                              title="Export markdown"
+                            >
+                              ⇩
                             </button>
                             <button
                               className="title-edit-btn"
@@ -779,44 +1014,59 @@ export default function Sidebar({
                             >
                               ×
                             </button>
-                          </div>
-                        </div>
-                        <div className="conversation-meta-row">
-                          <span className="conversation-meta">{conv.message_count} messages</span>
-                          <button
-                            type="button"
-                            className="conversation-archive-btn"
-                            onClick={(e) => handleMetadataClick(e, conv, { archived: !conv.archived })}
-                          >
-                            {conv.archived ? 'Restore' : 'Archive'}
-                          </button>
-                        </div>
-                        <div className="conversation-tags">
-                          {(conv.tags || []).map((tag) => (
                             <button
                               type="button"
-                              className="conversation-tag"
-                              key={tag}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setTagFilter(tag);
-                              }}
-                              title={`Filter by ${tag}`}
+                              className="conversation-archive-btn"
+                              onClick={(e) => handleMetadataClick(e, conv, { archived: !conv.archived })}
                             >
-                              {tag}
+                              {conv.archived ? 'Restore' : 'Archive'}
                             </button>
-                          ))}
-                          <button
-                            type="button"
-                            className="conversation-tag add"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleStartTagEdit(conv);
-                            }}
-                          >
-                            Tags
-                          </button>
+                          </div>
+                          <div className="conversation-meta-row">
+                            <span className="conversation-meta">{formatTurnCount(conv)}</span>
+                            <div className="conversation-tags">
+                              {(conv.tags || []).map((tag) => (
+                                <button
+                                  type="button"
+                                  className="conversation-tag"
+                                  key={tag}
+                                  style={{ '--tag-color': tagColorFor(tag) }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTagFilter(tag);
+                                  }}
+                                  title={`Filter by ${tag}`}
+                                >
+                                  {tag}
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                className="conversation-tag add"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartTagEdit(conv);
+                                }}
+                              >
+                                Tags
+                              </button>
+                            </div>
+                          </div>
                         </div>
+                        {titleSuggestions[conv.id]?.length > 0 && (
+                          <div className="title-suggestions" onClick={(e) => e.stopPropagation()}>
+                            {titleSuggestions[conv.id].map((title) => (
+                              <button
+                                type="button"
+                                key={title}
+                                onClick={(e) => handleUseTitleSuggestion(e, conv.id, title)}
+                                title="Use title suggestion"
+                              >
+                                {title}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
