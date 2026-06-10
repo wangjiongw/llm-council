@@ -17,6 +17,8 @@ const DEFAULT_SEARCH_FLAGS = {
   failedOnly: false,
   pinnedOnly: false,
   contextExcludedOnly: false,
+  favoriteOnly: false,
+  taggedOnly: false,
 };
 
 const DEFAULT_SIDEBAR_STATE = {
@@ -171,8 +173,10 @@ const conversationFacetBadges = (conversation) => [
 ].filter(Boolean);
 
 const searchBadgesFor = (result) => [
+  result.archived ? 'Archived' : '',
   result.conversation_pinned ? 'Pinned' : '',
   result.favorite ? 'Favorite' : '',
+  Array.isArray(result.tags) && result.tags.length ? `Tags ${result.tags.length}` : '',
   result.has_files ? 'Files' : '',
   result.has_failed_run || ['failed', 'interrupted'].includes(result.status) ? 'Failed' : '',
   result.context_excluded ? 'Excluded' : '',
@@ -261,6 +265,7 @@ export default function Sidebar({
   const [titleSuggestionStatus, setTitleSuggestionStatus] = useState({});
   const [titleSuggestionSources, setTitleSuggestionSources] = useState({});
   const [titleSuggestionLoadingId, setTitleSuggestionLoadingId] = useState(null);
+  const [lastBatchAction, setLastBatchAction] = useState(null);
   const titleStatusTimersRef = useRef({});
 
   const allTags = useMemo(() => {
@@ -274,6 +279,12 @@ export default function Sidebar({
   const tagColors = conversationManagement?.tag_colors || {};
   const savedViews = conversationManagement?.saved_views || [];
   const tagColorFor = (tag) => tagColors[tag] || fallbackTagColor(tag);
+
+  const conversationById = useMemo(() => {
+    const map = new Map();
+    conversations.forEach((conversation) => map.set(conversation.id, conversation));
+    return map;
+  }, [conversations]);
 
   const currentFilters = useMemo(() => ({
     viewMode,
@@ -326,6 +337,8 @@ export default function Sidebar({
     if (searchFlags.failedOnly && !(result.has_failed_run || ['failed', 'interrupted'].includes(result.status))) return false;
     if (searchFlags.pinnedOnly && !(result.pinned || result.conversation_pinned)) return false;
     if (searchFlags.contextExcludedOnly && !result.context_excluded) return false;
+    if (searchFlags.favoriteOnly && !result.favorite) return false;
+    if (searchFlags.taggedOnly && !(Array.isArray(result.tags) && result.tags.length > 0)) return false;
     return true;
   }), [historySearchResults, historySearchMode, historySearchSource, searchFlags, visibleConversationIds]);
 
@@ -337,6 +350,8 @@ export default function Sidebar({
     searchFlags.failedOnly,
     searchFlags.pinnedOnly,
     searchFlags.contextExcludedOnly,
+    searchFlags.favoriteOnly,
+    searchFlags.taggedOnly,
   ].filter(Boolean).length;
   const activeConversationFacetCount = [
     listFacets.hasFiles,
@@ -582,13 +597,57 @@ export default function Sidebar({
 
   const selectedConversationList = () => Array.from(selectedConversationIds);
 
+  const batchActionLabel = (updates, tagMode, count) => {
+    const target = `${count} conversation${count === 1 ? '' : 's'}`;
+    if (updates.favorite === true) return `Favorited ${target}`;
+    if (updates.favorite === false) return `Unfavorited ${target}`;
+    if (updates.archived === true) return `Archived ${target}`;
+    if (updates.archived === false) return `Restored ${target}`;
+    if (updates.tags && tagMode === 'add') return `Added tags to ${target}`;
+    if (updates.tags && tagMode === 'remove') return `Removed tags from ${target}`;
+    if (updates.tags) return `Updated tags on ${target}`;
+    return `Updated ${target}`;
+  };
+
+  const metadataSnapshotFor = (ids) => ids
+    .map((id) => conversationById.get(id))
+    .filter(Boolean)
+    .map((conversation) => ({
+      id: conversation.id,
+      title: conversation.title || 'New Conversation',
+      metadata: {
+        favorite: Boolean(conversation.favorite),
+        archived: Boolean(conversation.archived),
+        pinned: Boolean(conversation.pinned),
+        tags: Array.isArray(conversation.tags) ? [...conversation.tags] : [],
+      },
+    }));
+
   const handleBatchUpdate = async (updates, tagMode = 'replace') => {
     const ids = selectedConversationList();
     if (!ids.length || !onBatchUpdateConversations) return;
+    const previous = metadataSnapshotFor(ids);
     await onBatchUpdateConversations(ids, updates, tagMode);
+    setLastBatchAction({
+      label: batchActionLabel(updates, tagMode, ids.length),
+      previous,
+      undoable: previous.length > 0,
+    });
     if (!updates.tags) {
       setSelectedConversationIds(new Set());
     }
+  };
+
+  const handleUndoBatchAction = async () => {
+    if (!lastBatchAction?.undoable || !onUpdateMetadata) return;
+    const previous = lastBatchAction.previous || [];
+    await Promise.all(previous.map((item) => onUpdateMetadata(item.id, item.metadata)));
+    setLastBatchAction({
+      label: `Undid ${lastBatchAction.label.toLowerCase()}`,
+      previous: [],
+      undoable: false,
+    });
+    setSelectedConversationIds(new Set());
   };
 
   const handleBatchTags = async (tagMode) => {
@@ -901,6 +960,8 @@ export default function Sidebar({
               <button type="button" className={searchFlags.hasFiles ? 'active' : ''} onClick={() => toggleSearchFlag('hasFiles')}>Files</button>
               <button type="button" className={searchFlags.failedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('failedOnly')}>Failed</button>
               <button type="button" className={searchFlags.pinnedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('pinnedOnly')}>Pinned</button>
+              <button type="button" className={searchFlags.favoriteOnly ? 'active' : ''} onClick={() => toggleSearchFlag('favoriteOnly')}>Favorite</button>
+              <button type="button" className={searchFlags.taggedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('taggedOnly')}>Tagged</button>
               <button type="button" className={searchFlags.contextExcludedOnly ? 'active' : ''} onClick={() => toggleSearchFlag('contextExcludedOnly')}>Excluded</button>
               {activeExtraFilterCount > 0 && (
                 <button type="button" className="clear" onClick={clearSearchFilters}>Clear filters</button>
@@ -909,6 +970,19 @@ export default function Sidebar({
           </div>
         )}
       </div>
+
+      {lastBatchAction && (
+        <div className="conversation-recent-action" aria-label="Recent conversation action">
+          <span>{lastBatchAction.label}</span>
+          <button
+            type="button"
+            onClick={handleUndoBatchAction}
+            disabled={!lastBatchAction.undoable || !onUpdateMetadata}
+          >
+            Undo
+          </button>
+        </div>
+      )}
 
       {selectedConversationIds.size > 0 && (
         <div className="conversation-bulk-toolbar" aria-label="Selected conversation actions">

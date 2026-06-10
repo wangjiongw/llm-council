@@ -180,23 +180,86 @@ describe('Sidebar conversation management controls', () => {
     expect(screen.queryByText('Plain Notes')).not.toBeInTheDocument();
   });
 
-  it('batch-updates selected conversations', async () => {
+  it('filters search results by favorite, tag, archived view, and tagged facets', async () => {
+    const user = userEvent.setup();
+    const conversations = [
+      { ...baseProps.conversations[0], has_files: false, has_failed_run: false, has_memory: false },
+      { ...baseProps.conversations[1], title: 'Plain Notes', has_files: false, has_failed_run: false, has_memory: false },
+      { id: 'conv-3', title: 'Archived Tagged Notes', created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-02T00:00:00Z', message_count: 2, turn_count: 1, tags: ['archive'], pinned: false, favorite: false, archived: true, has_files: false, has_failed_run: false, has_memory: false },
+    ];
+    const onSearchConversationHistory = vi.fn(async () => [
+      { conversation_id: 'conv-1', conversation_title: 'Architecture Notes', updated_at: '2026-06-02T00:00:00Z', source: 'message', role: 'assistant', message_index: 1, excerpt: 'notes hit', favorite: true, archived: false, tags: ['context'] },
+      { conversation_id: 'conv-2', conversation_title: 'Plain Notes', updated_at: '2026-05-02T00:00:00Z', source: 'message', role: 'assistant', message_index: 1, excerpt: 'notes hit', favorite: false, archived: false, tags: [] },
+      { conversation_id: 'conv-3', conversation_title: 'Archived Tagged Notes', updated_at: '2026-04-02T00:00:00Z', source: 'message', role: 'assistant', message_index: 1, excerpt: 'notes hit', favorite: false, archived: true, tags: ['archive'] },
+    ]);
+
+    render(
+      <Sidebar
+        {...baseProps}
+        conversations={conversations}
+        onSearchConversationHistory={onSearchConversationHistory}
+      />
+    );
+
+    await user.type(screen.getByLabelText('Search conversation history'), 'notes');
+    await waitFor(() => expect(onSearchConversationHistory).toHaveBeenCalledWith('notes'));
+
+    const groupTitles = () => [...document.querySelectorAll('.sidebar-search-group-title')].map((node) => node.textContent);
+    const expectGroupTitle = (title) => expect(groupTitles()).toContain(title);
+    const expectNoGroupTitle = (title) => expect(groupTitles()).not.toContain(title);
+
+    expectGroupTitle('Architecture Notes');
+    expectGroupTitle('Plain Notes');
+    expectNoGroupTitle('Archived Tagged Notes');
+
+    const searchFlags = screen.getByLabelText('Search result flags');
+    await user.click(within(searchFlags).getByRole('button', { name: 'Favorite' }));
+    expectGroupTitle('Architecture Notes');
+    expectNoGroupTitle('Plain Notes');
+
+    await user.click(within(searchFlags).getByRole('button', { name: 'Clear filters' }));
+    await user.selectOptions(screen.getByLabelText('Filter conversations by tag'), 'context');
+    expectGroupTitle('Architecture Notes');
+    expectNoGroupTitle('Plain Notes');
+
+    await user.selectOptions(screen.getByLabelText('Filter conversations by tag'), '');
+    await user.click(within(screen.getByLabelText('Conversation filters')).getByRole('button', { name: 'Archived' }));
+    expectGroupTitle('Archived Tagged Notes');
+    expectNoGroupTitle('Architecture Notes');
+
+    await user.click(within(searchFlags).getByRole('button', { name: 'Tagged' }));
+    expectGroupTitle('Archived Tagged Notes');
+  });
+
+  it('batch-updates selected conversations and can undo the last batch action', async () => {
     const onBatchUpdateConversations = vi.fn(async () => ({ conversations: [] }));
+    const onUpdateMetadata = vi.fn(async () => {});
     const user = userEvent.setup();
 
     render(
       <Sidebar
         {...baseProps}
         onBatchUpdateConversations={onBatchUpdateConversations}
+        onUpdateMetadata={onUpdateMetadata}
       />
     );
 
     expect(screen.getByText('2 turns')).toBeInTheDocument();
 
-    await user.click(screen.getByLabelText('Select Architecture Notes'));
+    await user.click(screen.getByLabelText('Select Other Notes'));
     await user.click(screen.getByRole('button', { name: 'Favorite' }));
 
-    expect(onBatchUpdateConversations).toHaveBeenCalledWith(['conv-1'], { favorite: true }, 'replace');
+    expect(onBatchUpdateConversations).toHaveBeenCalledWith(['conv-2'], { favorite: true }, 'replace');
+    expect(screen.getByText('Favorited 1 conversation')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(onUpdateMetadata).toHaveBeenCalledWith('conv-2', {
+      favorite: false,
+      archived: false,
+      pinned: false,
+      tags: [],
+    });
+    expect(screen.getByText('Undid favorited 1 conversation')).toBeInTheDocument();
   });
 
   it('edits and removes tags on a single conversation', async () => {

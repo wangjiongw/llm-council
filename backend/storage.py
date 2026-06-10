@@ -234,7 +234,7 @@ def _normalize_saved_view(view: Any) -> Optional[Dict[str, Any]]:
     }
     normalized_filters = {key: copy.deepcopy(value) for key, value in filters.items() if key in allowed_filter_keys}
     if isinstance(normalized_filters.get("searchFlags"), dict):
-        allowed_flags = {"hasFiles", "failedOnly", "pinnedOnly", "contextExcludedOnly"}
+        allowed_flags = {"hasFiles", "failedOnly", "pinnedOnly", "contextExcludedOnly", "favoriteOnly", "taggedOnly"}
         normalized_filters["searchFlags"] = {
             key: bool(value) for key, value in normalized_filters["searchFlags"].items() if key in allowed_flags
         }

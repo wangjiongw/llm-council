@@ -160,13 +160,15 @@ class ConversationMetadataAPITest(unittest.TestCase):
 
         view_response = self.client.post(
             "/api/conversations/saved-views",
-            json={"name": "Active context", "filters": {"viewMode": "active", "tagFilter": "context"}},
+            json={"name": "Active context", "filters": {"viewMode": "active", "tagFilter": "context", "searchFlags": {"favoriteOnly": True, "taggedOnly": True}}},
         )
 
         self.assertEqual(view_response.status_code, 200)
         saved_views = view_response.json()["saved_views"]
         self.assertEqual(saved_views[0]["name"], "Active context")
         self.assertEqual(saved_views[0]["filters"]["tagFilter"], "context")
+        self.assertTrue(saved_views[0]["filters"]["searchFlags"]["favoriteOnly"])
+        self.assertTrue(saved_views[0]["filters"]["searchFlags"]["taggedOnly"])
 
         management_response = self.client.get("/api/conversations/management")
         self.assertEqual(management_response.status_code, 200)
