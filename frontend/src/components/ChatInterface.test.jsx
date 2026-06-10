@@ -151,21 +151,69 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(input).toHaveValue('follow up question');
   });
 
-  it('restores an unsent draft back into the input', async () => {
+  it('keeps the draft when the active conversation rejects a quick send', async () => {
+    const user = userEvent.setup();
+    const onSendQuickMessage = vi.fn(() => false);
+    const conversation = { id: 'conv-quick-pending', messages: [] };
+
+    renderChat(conversation, { onSendQuickMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+
+    await user.type(input, 'quick follow up');
+    await user.click(screen.getByRole('button', { name: /Quick query/i }));
+
+    expect(onSendQuickMessage).toHaveBeenCalledWith('quick follow up', []);
+    expect(input).toHaveValue('quick follow up');
+  });
+
+  it('clears the draft only after a council send is accepted', async () => {
+    const user = userEvent.setup();
+    const onSendMessage = vi.fn(() => true);
+    const conversation = { id: 'conv-success', messages: [] };
+
+    renderChat(conversation, { onSendMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+
+    await user.type(input, 'accepted question');
+    await user.click(screen.getByRole('button', { name: /Send to council/i }));
+
+    expect(onSendMessage).toHaveBeenCalledWith('accepted question', []);
+    expect(input).toHaveValue('');
+  });
+
+  it('clears the draft only after a quick send is accepted', async () => {
+    const user = userEvent.setup();
+    const onSendQuickMessage = vi.fn(() => true);
+    const conversation = { id: 'conv-quick-success', messages: [] };
+
+    renderChat(conversation, { onSendQuickMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+
+    await user.type(input, 'accepted quick question');
+    await user.click(screen.getByRole('button', { name: /Quick query/i }));
+
+    expect(onSendQuickMessage).toHaveBeenCalledWith('accepted quick question', []);
+    expect(input).toHaveValue('');
+  });
+
+  it('restores an unsent draft back into the input and reports restoration', async () => {
+    const onDraftRestored = vi.fn();
     const conversation = { id: 'conv-restore', messages: [] };
-    const { rerender } = renderChat(conversation);
+    const { rerender } = renderChat(conversation, { onDraftRestored });
 
     rerender(
       <ChatInterface
         {...baseProps}
         conversation={conversation}
-        draftToRestore={{ id: 'draft-restore', content: 'restore this draft' }}
+        onDraftRestored={onDraftRestored}
+        draftToRestore={{ id: 'draft-restore', restoreId: 'restore-1', content: 'restore this draft' }}
       />
     );
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Ask/i)).toHaveValue('restore this draft');
     });
+    expect(onDraftRestored).toHaveBeenCalledWith('restore-1');
   });
 
   it('does not submit when Enter commits IME composition', async () => {
