@@ -1,8 +1,10 @@
 import { formatFileSize } from '../utils/fileUtils';
 
 export default function FileBubble({ file, onDelete, disabled }) {
+  const isRestoredMetadata = !file.rawFile;
+
   return (
-    <div className={`file-bubble ${disabled ? 'disabled' : ''}`}>
+    <div className={`file-bubble ${disabled ? 'disabled' : ''} ${isRestoredMetadata ? 'restored' : ''}`.trim()}>
       {/* Thumbnail or icon */}
       {file.thumbnail ? (
         <img src={file.thumbnail} className="file-bubble-image" alt="" />
@@ -18,7 +20,7 @@ export default function FileBubble({ file, onDelete, disabled }) {
           {file.name}
         </div>
         <div className="file-bubble-size">
-          {formatFileSize(file.size)}
+          {isRestoredMetadata ? 'Reattach to send' : formatFileSize(file.size)}
         </div>
       </div>
 

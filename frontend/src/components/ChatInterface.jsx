@@ -206,6 +206,7 @@ const stageModelBreakdown = (items = [], contentKey) => items.map((item) => ({
   errorType: item?.error_type || '',
   duration: item?.duration_seconds,
   tokens: item?.usage?.total_tokens || 0,
+  usageMissing: item?.status !== 'failed' && Boolean(item?.[contentKey]) && item?.usage?.total_tokens == null,
 }));
 
 const sumTokens = (...items) => items.flat().reduce((total, item) => {
@@ -220,6 +221,12 @@ const maxDuration = (...items) => {
   return durations.length ? Math.max(...durations) : null;
 };
 
+const countMissingUsage = (...items) => items.flat().filter((item) => {
+  if (!item || item.status === 'failed') return false;
+  const hasOutput = Boolean(item.response || item.ranking);
+  return hasOutput && item.usage?.total_tokens == null;
+}).length;
+
 const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
   const isQuick = msg.metadata?.mode === 'quick';
   const stage1 = summarizeResults(msg.stage1 || [], 'response');
@@ -227,6 +234,7 @@ const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
   const attempts = msg.stage3?.metadata?.attempts || msg.metadata?.attempts || [];
   const warnings = msg.metadata?.warnings || [];
   const tokenTotal = sumTokens(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
+  const missingUsageCount = countMissingUsage(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
   const slowestStageDuration = maxDuration(msg.stage1 || [], msg.stage2 || [], [msg.stage3]);
   const failedModels = [
     ...(msg.stage1 || []),
@@ -237,14 +245,34 @@ const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
     .map(item => shortModelName(item.model))
     .filter(Boolean);
   const uniqueFailedModels = [...new Set(failedModels)];
-  const hasData = stage1.total > 0 || stage2.total > 0 || msg.stage3 || attempts.length > 0 || warnings.length > 0;
+  const allStage1Failed = !isQuick && stage1.total > 0 && stage1.success === 0;
+  const successfulAttemptIndex = attempts.findIndex(attempt => attempt?.ok);
+  const usedFallback = successfulAttemptIndex > 0;
+  const allFallbacksFailed = attempts.length > 0 && attempts.every(attempt => !attempt?.ok) && (msg.stage3?.status === 'failed' || msg.stage3?.error_type);
+  const sourceReferences = (msg.metadata?.aggregate_rankings || [])
+    .filter(item => item?.model)
+    .slice(0, 3)
+    .map((item, index) => ({
+      rank: index + 1,
+      model: shortModelName(item.model),
+      averageRank: item.average_rank,
+      votes: item.rankings_count,
+    }));
+  const derivedWarnings = [
+    ...warnings,
+    allStage1Failed ? 'All Stage 1 models failed; the final answer is a failure placeholder.' : '',
+    allFallbacksFailed ? 'Chair fallback attempts were exhausted; retry after checking provider availability.' : '',
+    missingUsageCount ? `${missingUsageCount} successful model call${missingUsageCount === 1 ? '' : 's'} did not report token usage.` : '',
+  ].filter(Boolean);
+  const hasData = stage1.total > 0 || stage2.total > 0 || msg.stage3 || attempts.length > 0 || derivedWarnings.length > 0;
 
   if (!hasData) return null;
 
   const stage1Breakdown = stageModelBreakdown(msg.stage1 || [], 'response');
   const stage2Breakdown = stageModelBreakdown(msg.stage2 || [], 'ranking');
   const stage3Tokens = msg.stage3?.usage?.total_tokens || 0;
-  const hasBreakdown = stage1Breakdown.length > 0 || stage2Breakdown.length > 0 || attempts.length > 0 || stage3Tokens > 0;
+  const stage3UsageMissing = msg.stage3?.status !== 'failed' && Boolean(msg.stage3?.response) && msg.stage3?.usage?.total_tokens == null;
+  const hasBreakdown = stage1Breakdown.length > 0 || stage2Breakdown.length > 0 || attempts.length > 0 || stage3Tokens > 0 || stage3UsageMissing || sourceReferences.length > 0;
 
   return (
     <div className="council-run-summary" aria-label={isQuick ? 'Quick run summary' : 'Council run summary'}>
@@ -255,27 +283,36 @@ const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
         {!isQuick && stage2.total > 0 && <span className="council-summary-chip">{formatStageSummary('Stage 2', stage2)}</span>}
         {msg.stage3?.model && <span className="council-summary-chip">{isQuick ? 'Model' : 'Chair'} {shortModelName(msg.stage3.model)}</span>}
         {uniqueFailedModels.length > 0 && <span className="council-summary-chip warning">{uniqueFailedModels.length} model failure{uniqueFailedModels.length === 1 ? '' : 's'}</span>}
+        {allStage1Failed && <span className="council-summary-chip warning">All Stage 1 failed</span>}
         {attempts.length > 1 && <span className="council-summary-chip">{attempts.length - 1} fallback attempt{attempts.length === 2 ? '' : 's'}</span>}
+        {usedFallback && <span className="council-summary-chip warning">Chair fallback used</span>}
+        {allFallbacksFailed && <span className="council-summary-chip warning">Chair fallback exhausted</span>}
         {tokenTotal > 0 && <span className="council-summary-chip">{tokenTotal} tokens</span>}
+        {missingUsageCount > 0 && <span className="council-summary-chip warning">{missingUsageCount} usage missing</span>}
         {slowestStageDuration != null && <span className="council-summary-chip">slowest {slowestStageDuration}s</span>}
       </div>
-      {warnings.length > 0 && (
+      {derivedWarnings.length > 0 && (
         <div className="council-summary-warnings">
-          {warnings.map((warning, index) => <span key={`${warning}-${index}`}>{warning}</span>)}
+          {derivedWarnings.map((warning, index) => <span key={`${warning}-${index}`}>{warning}</span>)}
         </div>
       )}
       {hasBreakdown && (
         <details className="council-summary-details">
           <summary>Model contribution and timing</summary>
           <div className="council-contribution-grid">
+            {sourceReferences.map((item) => (
+              <span key={`source-${item.rank}-${item.model}`}>
+                Source #{item.rank} · {item.model}{item.averageRank != null ? ` · avg rank ${item.averageRank}` : ''}{item.votes ? ` · ${item.votes} vote${item.votes === 1 ? '' : 's'}` : ''}
+              </span>
+            ))}
             {stage1Breakdown.map((item, index) => (
               <span className={item.status === 'failed' ? 'failed' : ''} key={`s1-${item.model}-${index}`}>
-                Stage 1 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}
+                Stage 1 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}{item.usageMissing ? ' · usage missing' : ''}
               </span>
             ))}
             {stage2Breakdown.map((item, index) => (
               <span className={item.status === 'failed' ? 'failed' : ''} key={`s2-${item.model}-${index}`}>
-                Stage 2 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}
+                Stage 2 · {item.model}: {item.status}{item.errorType ? ` · ${item.errorType}` : ''}{item.duration != null ? ` · ${item.duration}s` : ''}{item.tokens ? ` · ${item.tokens} tokens` : ''}{item.usageMissing ? ' · usage missing' : ''}
               </span>
             ))}
             {attempts.map((attempt, index) => (
@@ -284,7 +321,7 @@ const CouncilRunSummary = memo(function CouncilRunSummary({ msg }) {
               </span>
             ))}
             {msg.stage3?.model && (
-              <span>Final · {shortModelName(msg.stage3.model)}{stage3Tokens ? ` · ${stage3Tokens} tokens` : ''}{msg.stage3.duration_seconds != null ? ` · ${msg.stage3.duration_seconds}s` : ''}</span>
+              <span>Final · {shortModelName(msg.stage3.model)}{stage3Tokens ? ` · ${stage3Tokens} tokens` : ''}{stage3UsageMissing ? ' · usage missing' : ''}{msg.stage3.duration_seconds != null ? ` · ${msg.stage3.duration_seconds}s` : ''}</span>
             )}
           </div>
         </details>
@@ -956,6 +993,7 @@ export default function ChatInterface({
   const turnAnchorsRef = useRef(new Map());
   const messageAnchorsRef = useRef(new Map());
   const draftHydratedConversationRef = useRef(null);
+  const previousMessageCountRef = useRef({ conversationId: null, count: 0 });
   const [draftStatus, setDraftStatus] = useState('');
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [highlightedMessageIndex, setHighlightedMessageIndex] = useState(null);
@@ -1012,6 +1050,8 @@ export default function ChatInterface({
         0
       );
       const top = Math.max(0, totalHeight - containerHeight);
+      const lastMessageIndex = Math.max(0, latestScrollState.conversationMessages.length - 1);
+      setPendingVirtualScrollTarget({ messageIndex: lastMessageIndex, nonce: Date.now() });
       setScrollMetrics((current) => (
         current.top === top && current.height === containerHeight ? current : { top, height: containerHeight }
       ));
@@ -1026,6 +1066,20 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [conversation, scrollToBottom]);
+
+  useEffect(() => {
+    const conversationId = conversation?.id || null;
+    const count = conversationMessages.length;
+    const previous = previousMessageCountRef.current;
+
+    previousMessageCountRef.current = { conversationId, count };
+    if (!conversationId || previous.conversationId !== conversationId || count <= previous.count) return undefined;
+
+    const frameId = window.requestAnimationFrame(() => {
+      scrollToBottom();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [conversation?.id, conversationMessages.length, scrollToBottom]);
 
   useEffect(() => {
     setContextPreview(null);
@@ -1587,6 +1641,26 @@ export default function ChatInterface({
     }
   }, [isLoading, handleFileUploadLocal]);
 
+  const hasUnavailableAttachedFiles = attachedFiles.some((file) => !file.rawFile);
+
+  const slashTemplateQuery = useMemo(() => {
+    const candidate = input.trimStart();
+    if (!candidate.startsWith('/') || candidate.includes('\n')) return null;
+    const query = candidate.slice(1);
+    if (/\s/.test(query)) return null;
+    return query.toLowerCase();
+  }, [input]);
+
+  const slashTemplateMatches = useMemo(() => {
+    if (slashTemplateQuery == null) return [];
+    return PROMPT_TEMPLATES.filter((template) => {
+      const haystack = `${template.id} ${template.label}`.toLowerCase();
+      return haystack.includes(slashTemplateQuery);
+    });
+  }, [slashTemplateQuery]);
+
+  const showSlashTemplateMenu = !isLoading && slashTemplateQuery != null && slashTemplateMatches.length > 0;
+
   const handlePaste = useCallback(async (e) => {
     if (!isLoading) {
       const items = e.clipboardData.items;
@@ -1608,10 +1682,11 @@ export default function ChatInterface({
     }
   }, [isLoading, handleFileUploadLocal]);
 
-  const insertPromptTemplate = useCallback((templateId) => {
+  const insertPromptTemplate = useCallback((templateId, options = {}) => {
     const template = PROMPT_TEMPLATES.find((item) => item.id === templateId);
     if (!template) return;
     setInput((current) => {
+      if (options.replaceInput) return template.content;
       const cleanCurrent = current.trimEnd();
       return cleanCurrent ? `${cleanCurrent}\n\n${template.content}` : template.content;
     });
@@ -1658,7 +1733,7 @@ export default function ChatInterface({
       return;
     }
 
-    if ((!input.trim() && attachedFiles.length === 0) || isLoading) return;
+    if ((!input.trim() && attachedFiles.length === 0) || isLoading || hasUnavailableAttachedFiles) return;
     const accepted = normalizedMode === 'quick' && onSendQuickMessage
       ? onSendQuickMessage(input, attachedFiles)
       : onSendMessage(input, attachedFiles);
@@ -1668,7 +1743,7 @@ export default function ChatInterface({
     setContextPreview(null);
     setContextPreviewError('');
     // App clears sent files after a successful response.
-  }, [attachedFiles, clearSavedDraft, editTarget, input, isLoading, onRetryQuery, onSendMessage, onSendQuickMessage]);
+  }, [attachedFiles, clearSavedDraft, editTarget, hasUnavailableAttachedFiles, input, isLoading, onRetryQuery, onSendMessage, onSendQuickMessage]);
 
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
@@ -1740,6 +1815,18 @@ export default function ChatInterface({
       return;
     }
 
+    if (showSlashTemplateMenu && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      insertPromptTemplate(slashTemplateMatches[0].id, { replaceInput: true });
+      return;
+    }
+
+    if (showSlashTemplateMenu && e.key === 'Escape') {
+      e.preventDefault();
+      setInput('');
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       submitMessage(draftMode === 'quick' ? 'council' : 'quick');
@@ -1750,7 +1837,7 @@ export default function ChatInterface({
       e.preventDefault();
       handleSubmit(e);
     }
-  }, [draftMode, handleSubmit, submitMessage]);
+  }, [draftMode, handleSubmit, insertPromptTemplate, showSlashTemplateMenu, slashTemplateMatches, submitMessage]);
 
   useEffect(() => {
     if (!isLoading || !onStopQuery) return undefined;
@@ -2051,6 +2138,21 @@ export default function ChatInterface({
                   ))}
                 </select>
               </div>
+              {showSlashTemplateMenu && (
+                <div className="slash-command-menu" aria-label="Slash command templates">
+                  {slashTemplateMatches.map((template) => (
+                    <button
+                      type="button"
+                      key={template.id}
+                      onClick={() => insertPromptTemplate(template.id, { replaceInput: true })}
+                    >
+                      <strong>{template.label}</strong>
+                      <span>{template.id}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <textarea
                 ref={inputRef}
                 className="message-input"
@@ -2072,6 +2174,12 @@ export default function ChatInterface({
                 disabled={isLoading}
                 rows={3}
               />
+
+              {hasUnavailableAttachedFiles && (
+                <div className="file-queue-status" role="status">
+                  Reattach restored files or remove them before sending.
+                </div>
+              )}
 
               <FileQueue
                 files={attachedFiles}
@@ -2106,7 +2214,7 @@ export default function ChatInterface({
                   type="button"
                   className="quick-button"
                   onClick={handleQuickSubmit}
-                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading}
+                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading || hasUnavailableAttachedFiles}
                   title={editTarget ? "Retry this edited message with quick mode" : "Quick single-model response"}
                   aria-label={editTarget ? "Retry edited message with quick mode" : "Quick query"}
                 >
@@ -2116,7 +2224,7 @@ export default function ChatInterface({
                   type="button"
                   className="send-button"
                   onClick={handleCouncilSubmit}
-                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading}
+                  disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading || hasUnavailableAttachedFiles}
                   title={editTarget ? "Retry this edited message with council mode" : "Full 3-stage council response"}
                   aria-label={editTarget ? "Retry edited message with council mode" : "Send to council"}
                 >

@@ -59,6 +59,22 @@
   cursor: default;
 }
 
+
+.file-bubble.restored {
+  border-color: #f1c27d;
+  background: #fff8ed;
+}
+
+.file-bubble.restored .file-bubble-icon {
+  border-color: #f1c27d;
+  background: #fffaf2;
+}
+
+.file-bubble.restored .file-bubble-size {
+  color: #9a5b00;
+  font-weight: 700;
+}
+
 .file-bubble:hover:not(.disabled) {
   background: #eef6ff;
   border-color: #8bbcf0;

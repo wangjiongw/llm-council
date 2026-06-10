@@ -18,6 +18,18 @@ const clampSidebarWidth = (value) => {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, numeric));
 };
 
+const fileQueueMetadata = (files = []) => files.map(({ rawFile, restored, ...file }) => ({
+  ...file,
+  restored: Boolean(restored || !rawFile),
+}));
+
+const restoreFileQueueMetadata = (files = []) => files.map((file) => ({
+  ...file,
+  restored: true,
+}));
+
+const hasUnavailableFiles = (files = []) => files.some((file) => !file.rawFile);
+
 function App() {
   const [conversations, setConversations] = useState([]);
   const [conversationManagement, setConversationManagement] = useState({ tag_colors: {}, saved_views: [] });
@@ -36,6 +48,7 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)));
   const [pendingMessageJump, setPendingMessageJump] = useState(null);
   const conversationDetailsRequestRef = useRef(0);
+  const pendingFileQueuesRef = useRef(new Map());
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -86,21 +99,28 @@ function App() {
       setCurrentConversation(null);
       setCurrentContextAudit(null);
       setCurrentContextPolicy(null);
+      setAttachedFiles([]);
       return null;
     }
 
     try {
-      const [conv, audit] = await Promise.all([
+      const [conv, audit, fileQueue] = await Promise.all([
         api.getConversation(conversationId),
         api.getConversationContext(conversationId).catch((error) => {
           console.warn('Failed to load conversation context audit:', error);
           return null;
+        }),
+        api.getFileQueue(conversationId).catch((error) => {
+          console.warn('Failed to load pending file queue:', error);
+          return { files: [] };
         }),
       ]);
       if (!isCurrentRequest()) return null;
       setCurrentConversation(conv);
       setCurrentContextAudit(audit);
       setCurrentContextPolicy(audit?.context_policy || conv.context_policy || null);
+      const rememberedFiles = pendingFileQueuesRef.current.get(conversationId);
+      setAttachedFiles(rememberedFiles || restoreFileQueueMetadata(fileQueue?.files || []));
       return conv;
     } catch (error) {
       if (isCurrentRequest()) {
@@ -124,6 +144,7 @@ function App() {
       ]);
       setCurrentConversationId(newConv.id);
       setCurrentConversation(newConv);
+      pendingFileQueuesRef.current.set(newConv.id, []);
       setAttachedFiles([]); // Clear file queue for new conversation
       setCurrentContextAudit(null);
       setCurrentContextPolicy(newConv.context_policy || null);
@@ -518,18 +539,31 @@ function App() {
     }
   };
 
+  const persistFileQueue = useCallback((conversationId, files) => {
+    if (!conversationId) return;
+    pendingFileQueuesRef.current.set(conversationId, files);
+    api.updateFileQueue(conversationId, fileQueueMetadata(files)).catch((error) => {
+      console.warn('Failed to persist pending file queue:', error);
+    });
+  }, []);
+
+  const updateAttachedFiles = useCallback((files) => {
+    setAttachedFiles(files);
+    persistFileQueue(currentConversationId, files);
+  }, [currentConversationId, persistFileQueue]);
+
   // File upload handler
   const handleFileUpload = async (newFiles) => {
     try {
       const processedFiles = await processUploadedFiles(newFiles, attachedFiles);
-      setAttachedFiles(prev => [...prev, ...processedFiles]);
+      updateAttachedFiles([...attachedFiles, ...processedFiles]);
     } catch (error) {
       alert(error.message);
     }
   };
 
   const handleDeleteFile = (fileId) => {
-    setAttachedFiles(attachedFiles.filter(f => f.id !== fileId));
+    updateAttachedFiles(attachedFiles.filter(f => f.id !== fileId));
   };
 
   const handleStopQuery = () => {
@@ -821,6 +855,11 @@ function App() {
   const handleSendMessage = (content, files = attachedFiles) => {
     if (!currentConversationId || currentConversation?.id !== currentConversationId) return false;
 
+    if (hasUnavailableFiles(files)) {
+      alert('Pending files restored from metadata must be reattached before sending.');
+      return false;
+    }
+
     const hasFiles = files.length > 0;
     const messageCountBefore = currentConversation?.messages?.length ?? 0;
     setIsLoading(true);
@@ -879,7 +918,7 @@ function App() {
 
           // Files are one-shot browser File objects. Sent file metadata stays on
           // the message; the pending queue is cleared after success.
-          setAttachedFiles([]);
+          updateAttachedFiles([]);
 
           // Reload conversations list and persisted turn audit.
           loadConversations();
@@ -988,6 +1027,11 @@ function App() {
   const handleSendQuickMessage = (content, files = attachedFiles) => {
     if (!currentConversationId || currentConversation?.id !== currentConversationId) return false;
 
+    if (hasUnavailableFiles(files)) {
+      alert('Pending files restored from metadata must be reattached before sending.');
+      return false;
+    }
+
     const messageCountBefore = currentConversation?.messages?.length ?? 0;
     const hasFiles = files.length > 0;
     setIsLoading(true);
@@ -1044,7 +1088,7 @@ function App() {
 
           // Files are one-shot browser File objects. Sent file metadata stays on
           // the message; the pending queue is cleared after success.
-          setAttachedFiles([]);
+          updateAttachedFiles([]);
         } else {
           const assistantMessage = {
             role: 'assistant',
@@ -1156,7 +1200,7 @@ function App() {
         isLoading={isLoading}
         activeStreamId={activeStreamId}
         attachedFiles={attachedFiles}
-        onFilesChange={setAttachedFiles}
+        onFilesChange={updateAttachedFiles}
         onFileUpload={handleFileUpload}
         onDeleteFile={handleDeleteFile}
         messageJumpTarget={pendingMessageJump}

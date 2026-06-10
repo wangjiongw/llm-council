@@ -139,6 +139,40 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(bottomCall).toBeTruthy();
   });
 
+  it('scrolls virtualized conversations to the bottom when a new turn is appended', async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => (
+      index % 2 === 0
+        ? { role: 'user', content: 'Question ' + index }
+        : assistantMessage('Answer ' + index)
+    ));
+    const conversation = { id: 'conv-virtual-append', messages };
+    const view = renderChat(conversation);
+    HTMLElement.prototype.scrollTo.mockClear();
+
+    view.rerender(
+      <ChatInterface
+        {...baseProps}
+        conversation={{
+          ...conversation,
+          messages: [
+            ...messages,
+            { role: 'user', content: 'new virtual bottom question' },
+            assistantMessage('new virtual bottom answer'),
+          ],
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith(expect.objectContaining({
+        behavior: 'smooth',
+        top: expect.any(Number),
+      }));
+    });
+    const bottomCall = HTMLElement.prototype.scrollTo.mock.calls.find(([arg]) => arg?.behavior === 'smooth' && arg?.top > 0);
+    expect(bottomCall).toBeTruthy();
+  });
+
   it('previews historical assistant answers and keeps the latest answer expanded', () => {
     const conversation = {
       id: 'conv-collapse',
@@ -306,6 +340,50 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(screen.getByPlaceholderText(/Ask/i).value).toContain('Review the following code for correctness');
   });
 
+  it('inserts prompt templates from the slash command menu without sending', async () => {
+    const user = userEvent.setup();
+    const onSendMessage = vi.fn(() => true);
+    const conversation = { id: 'conv-slash-template', messages: [] };
+
+    renderChat(conversation, { onSendMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+
+    await user.type(input, '/co');
+    const menu = screen.getByLabelText('Slash command templates');
+    await user.click(within(menu).getByRole('button', { name: /Code review/i }));
+
+    expect(input.value).toContain('Review the following code for correctness');
+    expect(input.value).not.toContain('/co');
+    expect(onSendMessage).not.toHaveBeenCalled();
+
+    await user.clear(input);
+    await user.type(input, '/debug');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    expect(input.value).toContain('Diagnose the failure below');
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('marks restored file metadata as unavailable and blocks send buttons', () => {
+    const onSendMessage = vi.fn(() => true);
+    const onSendQuickMessage = vi.fn(() => true);
+    const conversation = { id: 'conv-restored-files', messages: [] };
+
+    renderChat(conversation, {
+      onSendMessage,
+      onSendQuickMessage,
+      attachedFiles: [{ id: 'file-1', name: 'restored.pdf', size: 1024, category: 'document', restored: true }],
+    });
+
+    expect(screen.getByText('restored.pdf')).toBeInTheDocument();
+    expect(screen.getByText('Reattach to send')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Reattach restored files');
+    expect(screen.getByRole('button', { name: 'Quick query' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send to council' })).toBeDisabled();
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(onSendQuickMessage).not.toHaveBeenCalled();
+  });
+
   it('shows retry-with-edit preview and submits the selected retry mode', async () => {
     const user = userEvent.setup();
     const onRetryQuery = vi.fn();
@@ -339,7 +417,11 @@ describe('ChatInterface conversation efficiency controls', () => {
         { role: 'user', content: 'Explain reliability' },
         {
           role: 'assistant',
-          metadata: { mode: 'council', warnings: ['Stage 1 had 1 failed model call.'] },
+          metadata: {
+            mode: 'council',
+            warnings: ['Stage 1 had 1 failed model call.'],
+            aggregate_rankings: [{ model: 'vendor/model-a', average_rank: 1, rankings_count: 1 }],
+          },
           stage1: [
             { model: 'vendor/model-a', response: 'A', status: 'success', usage: { total_tokens: 12 }, duration_seconds: 4 },
             { model: 'vendor/model-b', status: 'failed', error_type: 'timeout', error: 'slow' },
@@ -372,9 +454,75 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(screen.getByText('Chair chair')).toBeInTheDocument();
     expect(screen.getByText('2 model failures')).toBeInTheDocument();
     expect(screen.getByText('1 fallback attempt')).toBeInTheDocument();
+    expect(screen.getByText('Chair fallback used')).toBeInTheDocument();
     expect(screen.getByText('40 tokens')).toBeInTheDocument();
     expect(screen.getByText('slowest 6s')).toBeInTheDocument();
     expect(screen.getByText('Stage 1 had 1 failed model call.')).toBeInTheDocument();
+    expect(screen.getByText('Source #1 · model-a · avg rank 1 · 1 vote')).toBeInTheDocument();
+  });
+
+  it('shows council summary warnings for missing usage and exhausted chair fallback attempts', () => {
+    const conversation = {
+      id: 'conv-council-summary-warnings',
+      messages: [
+        { role: 'user', content: 'Explain confidence' },
+        {
+          role: 'assistant',
+          metadata: { mode: 'council' },
+          stage1: [
+            { model: 'vendor/model-a', response: 'A', status: 'success' },
+          ],
+          stage2: [
+            { model: 'vendor/judge', ranking: 'FINAL RANKING:\n1. Response A', status: 'success' },
+          ],
+          stage3: {
+            response: '',
+            status: 'failed',
+            model: 'vendor/chair',
+            error_type: 'timeout',
+            metadata: {
+              attempts: [
+                { model: 'vendor/chair', ok: false, error_type: 'timeout' },
+                { model: 'vendor/fallback', ok: false, error_type: 'http_status' },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    renderChat(conversation);
+
+    expect(screen.getByText('2 usage missing')).toBeInTheDocument();
+    expect(screen.getByText('Chair fallback exhausted')).toBeInTheDocument();
+    expect(screen.getByText('2 successful model calls did not report token usage.')).toBeInTheDocument();
+    expect(screen.getByText('Chair fallback attempts were exhausted; retry after checking provider availability.')).toBeInTheDocument();
+  });
+
+  it('shows dedicated council summary copy when all stage 1 models failed', () => {
+    const conversation = {
+      id: 'conv-council-all-stage1-failed',
+      messages: [
+        { role: 'user', content: 'Explain failure' },
+        {
+          role: 'assistant',
+          metadata: { mode: 'council' },
+          status: 'failed',
+          stage1: [
+            { model: 'vendor/model-a', status: 'failed', error_type: 'timeout' },
+            { model: 'vendor/model-b', status: 'failed', error_type: 'http_status' },
+          ],
+          stage2: [],
+          stage3: { response: 'All models failed to respond.', status: 'failed', model: 'error', error_type: 'all_stage1_models_failed' },
+        },
+      ],
+    };
+
+    renderChat(conversation);
+
+    expect(screen.getByText('Stage 1 0/2, 2 failed')).toBeInTheDocument();
+    expect(screen.getByText('All Stage 1 failed')).toBeInTheDocument();
+    expect(screen.getByText('All Stage 1 models failed; the final answer is a failure placeholder.')).toBeInTheDocument();
   });
 
   it('opens provider diagnostics from provider-related error actions', async () => {
