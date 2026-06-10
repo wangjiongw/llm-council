@@ -25,6 +25,7 @@ const contentToText = (content) => {
 };
 
 const DRAFT_STORAGE_PREFIX = 'llm-council:draft:';
+const DEFAULT_DRAFT_MODE = 'council';
 const SEARCH_STORAGE_PREFIX = 'llm-council:conversation-search:';
 const LONG_USER_MESSAGE_CHARS = 2200;
 const LONG_USER_MESSAGE_LINES = 44;
@@ -38,6 +39,44 @@ const SEARCH_SCOPE_OPTIONS = [
   { value: 'council', label: 'Council' },
   { value: 'files', label: 'Files' },
 ];
+
+const PROMPT_TEMPLATES = [
+  { id: 'summarize', label: 'Summarize', content: 'Summarize the key points, decisions, open questions, and next actions from the material below.' },
+  { id: 'translate', label: 'Translate', content: 'Translate the following content. Preserve technical terms, numbers, names, and formatting.' },
+  { id: 'code-review', label: 'Code review', content: 'Review the following code for correctness, regressions, edge cases, maintainability, and missing tests. Prioritize concrete findings.' },
+  { id: 'debug', label: 'Debug', content: 'Diagnose the failure below. Identify the most likely root cause, what evidence supports it, and the smallest safe fix.' },
+  { id: 'tests', label: 'Test generation', content: 'Generate focused tests for the behavior below. Cover success, failure, edge cases, and regression risk.' },
+  { id: 'docs', label: 'Docs cleanup', content: 'Rewrite the following notes into clear project documentation with prerequisites, steps, validation, and rollback notes.' },
+];
+
+const normalizeDraftMode = (mode) => (mode === 'quick' ? 'quick' : DEFAULT_DRAFT_MODE);
+
+const parseSavedDraft = (saved) => {
+  if (!saved) return { content: '', mode: DEFAULT_DRAFT_MODE };
+  try {
+    const parsed = JSON.parse(saved);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        content: typeof parsed.content === 'string' ? parsed.content : '',
+        mode: normalizeDraftMode(parsed.mode),
+      };
+    }
+  } catch {
+    // Older drafts were stored as raw textarea text.
+  }
+  return { content: saved, mode: DEFAULT_DRAFT_MODE };
+};
+
+const writeSavedDraft = (key, content, mode) => {
+  const normalizedMode = normalizeDraftMode(mode);
+  const hasContent = Boolean(String(content || '').trim());
+  if (!hasContent && normalizedMode === DEFAULT_DRAFT_MODE) {
+    window.localStorage.removeItem(key);
+    return false;
+  }
+  window.localStorage.setItem(key, JSON.stringify({ content, mode: normalizedMode }));
+  return true;
+};
 
 
 const readConversationSearchState = (conversationId) => {
@@ -903,6 +942,7 @@ export default function ChatInterface({
   onDraftRestored,
 }) {
   const [input, setInput] = useState('');
+  const [draftMode, setDraftMode] = useState(DEFAULT_DRAFT_MODE);
   const [contextPreview, setContextPreview] = useState(null);
   const [contextPreviewError, setContextPreviewError] = useState('');
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -932,15 +972,21 @@ export default function ChatInterface({
   const conversationMessages = useMemo(() => conversation?.messages || [], [conversation?.messages]);
   const shouldVirtualizeMessages = conversationMessages.length > VIRTUAL_MESSAGE_THRESHOLD;
 
+  const persistDraft = useCallback((content, mode = draftMode) => {
+    if (!draftStorageKey) return false;
+    const wroteDraft = writeSavedDraft(draftStorageKey, content, mode);
+    return wroteDraft;
+  }, [draftMode, draftStorageKey]);
+
   const clearSavedDraft = useCallback(() => {
     if (!draftStorageKey) return;
     try {
-      window.localStorage.removeItem(draftStorageKey);
+      const wroteDraft = persistDraft('', draftMode);
+      setDraftStatus(wroteDraft ? `Mode saved: ${draftMode === 'quick' ? 'Quick' : 'Council'}` : '');
     } catch {
-      // Local storage may be unavailable in restricted browser contexts.
+      setDraftStatus('Draft storage unavailable');
     }
-    setDraftStatus('');
-  }, [draftStorageKey]);
+  }, [draftMode, draftStorageKey, persistDraft]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -964,8 +1010,10 @@ export default function ChatInterface({
 
     try {
       const saved = window.localStorage.getItem(draftStorageKey);
-      setInput(saved || '');
-      setDraftStatus(saved ? 'Draft restored' : '');
+      const parsedDraft = parseSavedDraft(saved);
+      setInput(parsedDraft.content);
+      setDraftMode(parsedDraft.mode);
+      setDraftStatus(saved ? `Draft restored · ${parsedDraft.mode === 'quick' ? 'Quick' : 'Council'}` : '');
     } catch {
       setDraftStatus('Draft storage unavailable');
     } finally {
@@ -981,20 +1029,15 @@ export default function ChatInterface({
     const timeoutId = window.setTimeout(() => {
       try {
         const value = input.trim() ? input : '';
-        if (value) {
-          window.localStorage.setItem(draftStorageKey, value);
-          setDraftStatus('Draft saved locally');
-        } else {
-          window.localStorage.removeItem(draftStorageKey);
-          setDraftStatus('');
-        }
+        const wroteDraft = persistDraft(value, draftMode);
+        setDraftStatus(wroteDraft ? `Draft saved locally · ${draftMode === 'quick' ? 'Quick' : 'Council'}` : '');
       } catch {
         setDraftStatus('Draft storage unavailable');
       }
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [conversation?.id, draftStorageKey, editTarget, input]);
+  }, [conversation?.id, draftMode, draftStorageKey, editTarget, input, persistDraft]);
 
   // Memoize context calculation to avoid re-computing on every render
   const conversationContext = useMemo(() => {
@@ -1411,6 +1454,7 @@ export default function ChatInterface({
 
     const frameId = window.requestAnimationFrame(() => {
       setInput(draftToRestore.content || '');
+      if (draftToRestore.mode) setDraftMode(normalizeDraftMode(draftToRestore.mode));
       inputRef.current?.focus();
       onDraftRestored?.(draftToRestore.restoreId || draftToRestore.id);
     });
@@ -1533,6 +1577,19 @@ export default function ChatInterface({
     }
   }, [isLoading, handleFileUploadLocal]);
 
+  const insertPromptTemplate = useCallback((templateId) => {
+    const template = PROMPT_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) return;
+    setInput((current) => {
+      const cleanCurrent = current.trimEnd();
+      return cleanCurrent ? `${cleanCurrent}\n\n${template.content}` : template.content;
+    });
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      adjustInputHeight();
+    });
+  }, [adjustInputHeight]);
+
   const handleEditMessage = useCallback((msg, messageIndex) => {
     const text = contentToText(msg.content);
     setEditTarget({
@@ -1553,53 +1610,49 @@ export default function ChatInterface({
     window.requestAnimationFrame(() => adjustInputHeight());
   }, [adjustInputHeight]);
 
-  const submitEditedRetry = useCallback((mode) => {
-    if (!editTarget || isLoading || !input.trim()) return;
-    onRetryQuery?.({
-      messageIndex: editTarget.messageIndex,
-      editedContent: input,
-      mode,
-    });
-    setEditTarget(null);
+  const submitMessage = useCallback((mode) => {
+    const normalizedMode = normalizeDraftMode(mode);
+    if (editTarget) {
+      if (isLoading || !input.trim()) return;
+      onRetryQuery?.({
+        messageIndex: editTarget.messageIndex,
+        editedContent: input,
+        mode: normalizedMode,
+      });
+      setEditTarget(null);
+      setInput('');
+      clearSavedDraft();
+      setContextPreview(null);
+      setContextPreviewError('');
+      return;
+    }
+
+    if ((!input.trim() && attachedFiles.length === 0) || isLoading) return;
+    const accepted = normalizedMode === 'quick' && onSendQuickMessage
+      ? onSendQuickMessage(input, attachedFiles)
+      : onSendMessage(input, attachedFiles);
+    if (accepted === false) return;
     setInput('');
     clearSavedDraft();
     setContextPreview(null);
     setContextPreviewError('');
-  }, [clearSavedDraft, editTarget, input, isLoading, onRetryQuery]);
+    // App clears sent files after a successful response.
+  }, [attachedFiles, clearSavedDraft, editTarget, input, isLoading, onRetryQuery, onSendMessage, onSendQuickMessage]);
 
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
-    if (editTarget) {
-      submitEditedRetry('council');
-      return;
-    }
-    if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
-      const accepted = onSendMessage(input, attachedFiles);
-      if (accepted === false) return;
-      setInput('');
-      clearSavedDraft();
-      setContextPreview(null);
-      setContextPreviewError('');
-      // App clears sent files after a successful response.
-    }
-  }, [input, attachedFiles, isLoading, onSendMessage, editTarget, submitEditedRetry, clearSavedDraft]);
+    submitMessage(draftMode);
+  }, [draftMode, submitMessage]);
+
+  const handleCouncilSubmit = useCallback((e) => {
+    e.preventDefault();
+    submitMessage('council');
+  }, [submitMessage]);
 
   const handleQuickSubmit = useCallback((e) => {
     e.preventDefault();
-    if (editTarget) {
-      submitEditedRetry('quick');
-      return;
-    }
-    if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
-      const accepted = onSendQuickMessage(input, attachedFiles);
-      if (accepted === false) return;
-      setInput('');
-      clearSavedDraft();
-      setContextPreview(null);
-      setContextPreviewError('');
-      // App clears sent files after a successful response.
-    }
-  }, [input, attachedFiles, isLoading, onSendQuickMessage, editTarget, submitEditedRetry, clearSavedDraft]);
+    submitMessage('quick');
+  }, [submitMessage]);
 
   const handlePreviewContext = useCallback(async (mode) => {
     if (!onPreviewContext || isLoading || isPreviewLoading) return;
@@ -1658,7 +1711,7 @@ export default function ChatInterface({
 
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
-      handleQuickSubmit(e);
+      submitMessage(draftMode === 'quick' ? 'council' : 'quick');
       return;
     }
 
@@ -1666,7 +1719,7 @@ export default function ChatInterface({
       e.preventDefault();
       handleSubmit(e);
     }
-  }, [handleQuickSubmit, handleSubmit]);
+  }, [draftMode, handleSubmit, submitMessage]);
 
   useEffect(() => {
     if (!isLoading || !onStopQuery) return undefined;
@@ -1884,6 +1937,7 @@ export default function ChatInterface({
             <div>
               <strong>Editing Turn {editTarget.turnNumber}</strong>
               <span>Submitting will replace this user message, remove later messages, and regenerate from here.</span>
+              <span>Retry preview: {draftMode === 'quick' ? 'Quick' : 'Council'} mode · {input.trim().length} chars · context rebuild starts at Turn {editTarget.turnNumber}</span>
             </div>
             <button type="button" onClick={cancelEditTarget}>Cancel</button>
           </div>
@@ -1934,6 +1988,38 @@ export default function ChatInterface({
         <form className="input-form" onSubmit={handleSubmit}>
           <div className="input-wrapper">
             <div className="input-main">
+              <div className="composer-toolbar" aria-label="Input workflow controls">
+                <div className="composer-mode-toggle" aria-label="Draft send mode">
+                  <button
+                    type="button"
+                    className={draftMode === 'council' ? 'active' : ''}
+                    onClick={() => setDraftMode('council')}
+                    aria-pressed={draftMode === 'council'}
+                  >
+                    Council
+                  </button>
+                  <button
+                    type="button"
+                    className={draftMode === 'quick' ? 'active' : ''}
+                    onClick={() => setDraftMode('quick')}
+                    aria-pressed={draftMode === 'quick'}
+                  >
+                    Quick
+                  </button>
+                </div>
+                <select
+                  className="prompt-template-select"
+                  value=""
+                  onChange={(event) => insertPromptTemplate(event.target.value)}
+                  disabled={isLoading}
+                  aria-label="Prompt template"
+                >
+                  <option value="">Prompt templates</option>
+                  {PROMPT_TEMPLATES.map((template) => (
+                    <option value={template.id} key={template.id}>{template.label}</option>
+                  ))}
+                </select>
+              </div>
               <textarea
                 ref={inputRef}
                 className="message-input"
@@ -1941,10 +2027,10 @@ export default function ChatInterface({
                   isLoading
                     ? "Query in progress... (Esc to stop)"
                     : editTarget
-                      ? "Edit this message... (Enter retry Council, Ctrl+Enter retry Quick)"
+                      ? `Edit this message... (Enter retry ${draftMode === 'quick' ? 'Quick' : 'Council'}, Ctrl+Enter alternate)`
                       : hasPreviousTurns
-                        ? "Continue... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
-                        : "Ask... (Enter Council, Ctrl+Enter Quick, Shift+Enter newline)"
+                        ? `Continue... (Enter ${draftMode === 'quick' ? 'Quick' : 'Council'}, Ctrl+Enter alternate, Shift+Enter newline)`
+                        : `Ask... (Enter ${draftMode === 'quick' ? 'Quick' : 'Council'}, Ctrl+Enter alternate, Shift+Enter newline)`
                 }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1996,8 +2082,9 @@ export default function ChatInterface({
                   {editTarget ? '⚡ Retry Quick' : '⚡ Quick'}
                 </button>
                 <button
-                  type="submit"
+                  type="button"
                   className="send-button"
+                  onClick={handleCouncilSubmit}
                   disabled={(editTarget ? !input.trim() : (!input.trim() && attachedFiles.length === 0)) || isLoading}
                   title={editTarget ? "Retry this edited message with council mode" : "Full 3-stage council response"}
                   aria-label={editTarget ? "Retry edited message with council mode" : "Send to council"}

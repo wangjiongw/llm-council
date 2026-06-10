@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatInterface from './ChatInterface';
@@ -214,6 +214,98 @@ describe('ChatInterface conversation efficiency controls', () => {
       expect(screen.getByPlaceholderText(/Ask/i)).toHaveValue('restore this draft');
     });
     expect(onDraftRestored).toHaveBeenCalledWith('restore-1');
+  });
+
+  it('persists and restores draft text with the selected send mode', async () => {
+    const user = userEvent.setup();
+    const conversation = { id: 'conv-mode-draft', messages: [] };
+
+    const { unmount } = renderChat(conversation);
+    const modeToggle = screen.getByLabelText('Draft send mode');
+    await user.click(within(modeToggle).getByRole('button', { name: 'Quick' }));
+    await user.type(screen.getByPlaceholderText(/Ask/i), 'mode-aware draft');
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem('llm-council:draft:conv-mode-draft')).toContain('mode-aware draft');
+      expect(window.localStorage.getItem('llm-council:draft:conv-mode-draft')).toContain('quick');
+    });
+
+    unmount();
+    renderChat(conversation);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Ask/i)).toHaveValue('mode-aware draft');
+    });
+    expect(within(screen.getByLabelText('Draft send mode')).getByRole('button', { name: 'Quick' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('restores older raw text drafts without mode metadata', async () => {
+    const conversation = { id: 'conv-legacy-draft', messages: [] };
+    window.localStorage.setItem('llm-council:draft:conv-legacy-draft', 'legacy raw draft');
+
+    renderChat(conversation);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Ask/i)).toHaveValue('legacy raw draft');
+    });
+    expect(within(screen.getByLabelText('Draft send mode')).getByRole('button', { name: 'Council' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('uses the selected mode for Enter and the alternate mode for Ctrl+Enter', async () => {
+    const user = userEvent.setup();
+    const onSendMessage = vi.fn(() => true);
+    const onSendQuickMessage = vi.fn(() => true);
+    const conversation = { id: 'conv-mode-submit', messages: [] };
+
+    renderChat(conversation, { onSendMessage, onSendQuickMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+    await user.click(within(screen.getByLabelText('Draft send mode')).getByRole('button', { name: 'Quick' }));
+    await user.type(input, 'selected quick');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    expect(onSendQuickMessage).toHaveBeenCalledWith('selected quick', []);
+    expect(onSendMessage).not.toHaveBeenCalled();
+
+    await user.type(input, 'alternate council');
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', ctrlKey: true });
+
+    expect(onSendMessage).toHaveBeenCalledWith('alternate council', []);
+  });
+
+  it('inserts local prompt templates into the draft', async () => {
+    const user = userEvent.setup();
+    const conversation = { id: 'conv-template', messages: [] };
+
+    renderChat(conversation);
+    await user.selectOptions(screen.getByLabelText('Prompt template'), 'code-review');
+
+    expect(screen.getByPlaceholderText(/Ask/i).value).toContain('Review the following code for correctness');
+  });
+
+  it('shows retry-with-edit preview and submits the selected retry mode', async () => {
+    const user = userEvent.setup();
+    const onRetryQuery = vi.fn();
+    const conversation = {
+      id: 'conv-retry-preview',
+      messages: [
+        { role: 'user', content: 'original question' },
+        assistantMessage('original answer'),
+      ],
+    };
+
+    renderChat(conversation, { onRetryQuery });
+    await user.click(screen.getByRole('button', { name: 'Edit this message' }));
+
+    expect(screen.getByText(/Retry preview: Council mode/)).toBeInTheDocument();
+    await user.click(within(screen.getByLabelText('Draft send mode')).getByRole('button', { name: 'Quick' }));
+    expect(screen.getByText(/Retry preview: Quick mode/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Retry edited message with quick mode/i }));
+    expect(onRetryQuery).toHaveBeenCalledWith(expect.objectContaining({
+      messageIndex: 0,
+      editedContent: 'original question',
+      mode: 'quick',
+    }));
   });
 
   it('shows a council run summary with model failures, fallback attempts, tokens, and timings', () => {

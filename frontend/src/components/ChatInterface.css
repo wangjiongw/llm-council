@@ -406,6 +406,63 @@
   gap: var(--input-action-gap);
 }
 
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-mode-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.composer-mode-toggle button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.composer-mode-toggle button:hover,
+.composer-mode-toggle button.active {
+  border-color: var(--primary);
+  background: var(--surface-bg);
+  color: var(--primary);
+}
+
+.prompt-template-select {
+  flex: 0 1 210px;
+  min-width: 150px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-bg);
+  color: var(--app-text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prompt-template-select:disabled {
+  opacity: 0.55;
+}
+
 .message-input {
   width: 100%;
   box-sizing: border-box;
@@ -776,6 +833,20 @@
 
   .button-group > * {
     width: 100%;
+  }
+
+  .composer-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .composer-mode-toggle,
+  .prompt-template-select {
+    width: 100%;
+  }
+
+  .composer-mode-toggle button {
+    flex: 1 1 0;
   }
 
   .message-input {
