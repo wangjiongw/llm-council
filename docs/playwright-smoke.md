@@ -16,9 +16,12 @@ http://127.0.0.1:18080
 - `/api/conversations` 返回会话元数据契约；
 - `/api/conversations/search` 返回搜索契约；
 - 左侧历史搜索能显示结果并打开命中会话；
-- 深色/浅色主题切换后主聊天控件仍可见。
+- 深色/浅色主题切换后主聊天控件仍可见；
+- 普通 Council / Quick 发送失败恢复草稿，成功发送清空草稿；
+- fork branch Council / Quick 发送失败恢复草稿，成功发送只追加一个 user turn；
+- 公式和 Mermaid 在真实消息视图中渲染出非空节点且无 error placeholder。
 
-这些 smoke 不调用 LLM provider，也不发送真实聊天消息。
+这些 smoke 不调用 LLM provider。发送路径使用受控 SSE mock；branch smoke 会写入临时 conversation fixture 并在测试结束清理。
 
 ## Headless 云服务器首次准备
 

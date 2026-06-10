@@ -287,19 +287,21 @@ When a model call fails, the assistant message may show an ErrorActionPanel. Dep
 
 ## Testing and Verification
 
+The current regression matrix is documented in [docs/regression-matrix.md](docs/regression-matrix.md). It separates quick checks, pre-commit checks, and release smoke. Conversation backup and recovery steps are documented in [docs/conversation-backup-recovery.md](docs/conversation-backup-recovery.md).
+
 ### Backend Checks
 
 ```bash
-python -m py_compile backend/main.py backend/storage.py
-pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py tests/test_quick_stream.py tests/test_council_failures.py tests/test_resume_stream.py -q
+pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q
+pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q
 ```
 
 ### Frontend Checks
 
 ```bash
 cd frontend
+npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
 npm run lint
-npm run test
 npm run build
 ```
 
@@ -331,7 +333,9 @@ Covered smoke paths:
 - `/api/conversations` contract works;
 - `/api/conversations/search` contract works;
 - sidebar search opens a result;
-- theme toggle keeps main chat controls visible.
+- theme toggle keeps main chat controls visible;
+- ordinary and forked Council / Quick sends restore drafts on failure and clear drafts on success;
+- formula and Mermaid messages render nonblank rich content without error placeholders.
 
 Generated Playwright artifacts (`test-results/`, `playwright-report/`, `.blob-report/`) are ignored by git.
 

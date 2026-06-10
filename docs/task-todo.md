@@ -2,7 +2,7 @@
 
 更新时间：2026-06-10
 
-本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断和核心回归保护。上一轮 P0 可靠性工作已经落地并提交；下一轮重点转为补齐少量 P0 缺口、提升高频使用效率，并为后续拆分大组件/大模块做测试护栏。
+本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断、核心回归保护、备份恢复说明和标准回归矩阵。P0 可靠性与回归保护已经收口；下一轮重点转为高频使用效率、Council 可解释性、Provider 诊断和后续工程结构整理。
 
 ## 当前状态基线
 
@@ -15,6 +15,7 @@
 - `673d824`：新增独立 Markdown export fixture 回归测试，覆盖 Quick、Council、中文标题、中断会话和历史脏数据。
 - `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
 - `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
+- 当前收口批次：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
 
 当前可用能力：
 
@@ -26,6 +27,8 @@
 - Markdown export 已具备恢复路径属性：即使历史会话存在部分中断数据，也应尽量导出可读内容。
 - 后端 pytest、前端 Vitest、lint、build、Playwright smoke 已成为常规验收命令。
 - native 后端部署现在可通过 `/api/version` 和 `deploy/native/status.sh` 识别旧进程、旧 commit、PID 和启动时间。
+- 备份/恢复流程见 `docs/conversation-backup-recovery.md`。
+- 快速验收、提交前验收、发布前验收命令矩阵见 `docs/regression-matrix.md`。
 
 最近一轮验证证据：
 
@@ -39,43 +42,42 @@
 
 当前仍需关注的工程风险：
 
-- 发送可靠性已有 Council / Quick smoke，但 branch/fork 后发送失败恢复还没有独立 Playwright 用例。
-- RichMarkdown 已有组件级富内容 fixture，但还缺一个页面级“含公式 + Mermaid 的真实会话”smoke。
-- 数据备份和恢复流程还没有文档化，旧 conversation JSON 的运维恢复路径仍靠经验。
+- Playwright 发送 smoke 使用受控 SSE mock，不覆盖真实 provider outage、限流或慢响应链路。
+- 备份/恢复文档已经固化，但尚未在一次真实历史备份恢复演练中执行全流程。
 - `App.jsx`、`storage.py`、`RichMarkdown.jsx` 仍承担较多职责，后续功能继续堆叠会提高回归概率。
 
 ## 下一轮优先级
 
-### P0：剩余可靠性缺口
+### P0：可靠性和回归保护收口完成
 
-目标：补齐上一轮 P0 中尚未覆盖的页面级和运维级保护，避免局部测试通过但真实长会话/恢复场景仍失效。
+目标：把近期真实暴露的问题转化为自动化验收和运维文档。当前 P0 最小交付包已完成：
 
 1. Branch / fork 发送可靠性 smoke。
-   - 使用现有 fork API 创建 branch，再覆盖 Council / Quick 的失败恢复草稿和成功清空路径。
-   - 验证 branch 已选择、branch 未选择、会话切换后的发送不会把草稿丢失或写入错误会话。
-   - 验证重复点击发送不会产生重复 user message。
-
-   验收标准：branch 场景下没有实际创建 user message / assistant placeholder 时，输入框必须恢复原草稿；成功发送后才清空草稿。
+   - 已使用真实 fork API 创建 branch fixture。
+   - 已覆盖 branch Council 发送失败恢复草稿、成功发送清空草稿、只追加一个 accepted user turn。
+   - 已覆盖 branch Quick 发送失败恢复草稿、成功发送清空草稿、快速重复点击不重复落库。
 
 2. 富内容页面级 smoke。
-   - 创建或拦截一个含标准 LaTeX、松散公式和 Mermaid 的测试会话。
-   - 等待 KaTeX/Mermaid 渲染节点出现。
-   - 断言没有 `.error` 状态、没有空白 Mermaid 容器，源码/错误 fallback 不影响整条消息阅读。
-
-   验收标准：真实页面路径能展示公式和 Mermaid；渲染失败时不会吞掉消息正文。
+   - 已覆盖真实消息视图中的标准 LaTeX、松散公式、行内公式和 Mermaid。
+   - 已断言 KaTeX/Mermaid 渲染节点非空，且没有 Mermaid error placeholder。
 
 3. 数据备份和恢复说明。
-   - 增加 conversations 数据目录备份命令。
-   - 文档化恢复步骤：停服务、备份当前数据、替换 JSON、重启、跑导出 smoke。
-   - 对 metadata 新字段保持向后兼容检查。
-
-   验收标准：旧 conversation JSON 缺字段时列表、详情、导出均不崩溃；恢复流程可按文档执行。
+   - 已新增 `docs/conversation-backup-recovery.md`。
+   - 已记录停服务、备份、恢复、重启、status 检查和导出 smoke。
 
 4. 回归命令文档化。
-   - 在 README 或 docs 中列出快速验收、提交前验收、发布前验收三档命令。
-   - 明确后端 export/version/metadata、stream/fork、前端 ChatInterface/RichMarkdown、lint/build、Playwright smoke 的使用场景。
+   - 已新增 `docs/regression-matrix.md`。
+   - 已区分快速验收、提交前验收、发布前验收和备份/恢复验收。
 
-   验收标准：每次修复可以选择合适测试层级，而不是只靠手工试。
+验收证据：
+
+- `npm run test:e2e -- -g "forked branch|formula and Mermaid"`：通过，`3 passed`。
+- `npm run test:e2e`：通过，`8 passed`。
+- `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
+- `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
+- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
+- `npm run lint`：通过。
+- `npm run build`：通过。
 
 ### P1：高频使用效率
 
@@ -143,34 +145,25 @@
 
 ## 建议执行顺序
 
-1. 补 `P0-1` Branch / fork 发送可靠性 smoke。
-   - 原因：发送草稿恢复已经覆盖普通 Council / Quick，branch 是同一核心路径里剩下的高风险分支。
-
-2. 补 `P0-2` 富内容页面级 smoke。
-   - 原因：组件测试已经精确锁住解析数量，页面级 smoke 用来确认真实消息列表里的懒渲染、fallback 和布局没有断。
-
-3. 完成 `P0-3` 数据备份和恢复说明。
-   - 原因：导出现在具备恢复路径属性，但运维恢复步骤还没有沉淀到文档。
-
-4. 完成 `P0-4` 回归命令文档化。
-   - 原因：当前测试矩阵已成型，应把快速/提交前/发布前验收固化，减少后续修复时的漏测。
-
-5. 进入 `P1-2` Council 可解释性和 `P1-3` Provider 诊断。
+1. 进入 `P1-2` Council 可解释性和 `P1-3` Provider 诊断。
    - 原因：Council 的价值依赖“为什么可信”和“失败后怎么办”，这两项应一起设计。
 
-6. 推进 `P1-1` 会话管理产品化和 `P1-5` 输入工作流。
-   - 原因：它们提升长期使用效率，但应建立在核心可靠性继续稳定的基础上。
+2. 推进 `P1-1` 会话管理产品化和 `P1-5` 输入工作流。
+   - 原因：它们提升长期使用效率，并已建立 P0 可靠性测试护栏。
 
-7. 最后进入 `P2` 工程结构整理。
-   - 原因：等 P0/P1 的高风险路径被测试锁住后，再拆大组件和大模块更稳。
+3. 推进 `P1-4` 长会话性能和富内容效率。
+   - 原因：页面级 rich content smoke 已建立，后续可以更安全地优化懒渲染和缓存。
+
+4. 最后进入 `P2` 工程结构整理。
+   - 原因：等 P1 的产品行为更稳定后，再拆大组件和大模块更稳。
 
 ## 下一轮最小交付包
 
 建议下一轮只拿以下 4 个任务作为一个可完成批次：
 
-1. Branch / fork 发送失败恢复和成功发送 smoke。
-2. 含公式和 Mermaid 的页面级富内容 smoke。
-3. conversations 数据备份 / 恢复文档和导出 smoke 操作说明。
-4. 标准回归命令矩阵文档化。
+1. Council Run Summary：成功模型、失败模型、fallback、关键观点来源。
+2. Provider diagnostics：只读连接诊断、配置错误入口、可复制错误上下文。
+3. 会话管理分面增强：failed/files/memory/pinned 等筛选和 grouped result 操作。
+4. 输入工作流第一版：模式草稿持久化、retry with edit 预览、本地 prompt 模板入口。
 
-完成后再进入 Council 解释性和 Provider 诊断。这样可以把上一轮 P0 的剩余缺口收尾，再继续做高频效率功能。
+P0 可靠性批次已收口；下一轮可以开始做高频效率和可解释性。
