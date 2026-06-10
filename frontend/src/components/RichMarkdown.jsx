@@ -433,7 +433,7 @@ function useMermaidSvg(code, mode) {
   const [result, setResult] = useState(null);
 
   useEffect(() => {
-    if (mode !== 'full') {
+    if (mode !== 'full' || cached) {
       return undefined;
     }
 
@@ -452,18 +452,20 @@ function useMermaidSvg(code, mode) {
       })
       .catch((error) => {
         if (!cancelled) {
-          setResult({
+          const nextResult = {
             cacheKey,
             svg: '',
             error: error?.message || 'Unable to render Mermaid diagram.',
-          });
+          };
+          remember(mermaidCache, cacheKey, nextResult, { maxEntries: 40, maxChars: 3_000_000 });
+          setResult(nextResult);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, code, mode]);
+  }, [cacheKey, cached, code, mode]);
 
   if (mode !== 'full') return { svg: '', error: '', state: 'deferred' };
   if (cached) return { ...cached, state: cached.error ? 'error' : 'ready' };

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import mermaid from 'mermaid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RichMarkdown from './RichMarkdown';
 
@@ -12,6 +13,7 @@ vi.mock('mermaid', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mermaid.render.mockResolvedValue({ svg: '<svg role="img"><text>Graph</text></svg>' });
   navigator.clipboard.writeText.mockClear();
 });
 
@@ -72,6 +74,26 @@ describe('RichMarkdown', () => {
     expect(screen.getByRole('button', { name: 'Copy source' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(screen.getByRole('dialog', { name: 'Mermaid diagram preview' })).toBeInTheDocument();
+  });
+
+  it('caches Mermaid render errors and keeps source readable', async () => {
+    mermaid.render.mockRejectedValue(new Error('bad diagram syntax'));
+    const content = `\`\`\`mermaid
+graph TD; A--
+\`\`\``;
+
+    const { unmount } = render(<RichMarkdown content={content} />);
+
+    expect(await screen.findByText('bad diagram syntax')).toBeInTheDocument();
+    expect(screen.getByText('graph TD; A--')).toBeInTheDocument();
+    expect(mermaid.render).toHaveBeenCalledTimes(1);
+
+    unmount();
+    render(<RichMarkdown content={content} />);
+
+    expect(await screen.findByText('bad diagram syntax')).toBeInTheDocument();
+    expect(screen.getByText('graph TD; A--')).toBeInTheDocument();
+    expect(mermaid.render).toHaveBeenCalledTimes(1);
   });
 
   it('renders loose bracket math blocks and parenthesized LaTeX inline math', async () => {
