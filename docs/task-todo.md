@@ -1,369 +1,176 @@
 # Chatbox 下一轮任务 TODO
 
-更新时间：2026-06-04
+更新时间：2026-06-10
 
-本文记录当前工程优化的下一轮重点任务。目标是优先提升单用户本地部署场景下的定位效率、Council 可解释性、错误恢复效率和长内容阅读体验。
+本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断和核心回归保护。上一轮 P0 可靠性工作已经落地并提交；下一轮重点转为补齐少量 P0 缺口、提升高频使用效率，并为后续拆分大组件/大模块做测试护栏。
 
-## 总体优先级
+## 当前状态基线
 
-1. 会话内全文搜索和跳转。
-2. 左侧会话搜索产品化。
-3. Council Run Summary。
-4. ErrorActionPanel。
-5. 长消息折叠与代码行号。
+当前代码已完成并提交以下近期修复与保护：
 
-优先顺序依据：日常使用频率、与现有能力耦合程度、实现复杂度、对长对话效率和问题恢复的收益。
+- `cefec19`：后续对话发送被拒时不再清空草稿，只有消息真正被接受发送后才清空输入框。
+- `78a2e3e`：Markdown 导出支持中文会话标题文件名，能处理不完整 assistant stage，并输出更可读的 transcript。
+- `249f734`：RichMarkdown 支持模型常见的松散 LaTeX 写法，包括独立 `[ ... ]` 公式块和 `\(\gamma\)` 一类行内公式。
+- `db9e193`：新增 `/api/version` 运行时诊断接口；native status 显示 commit、PID、started_at；设置弹窗显示后端状态；前端导出错误包含 conversation id 和后端原因。
+- `673d824`：新增独立 Markdown export fixture 回归测试，覆盖 Quick、Council、中文标题、中断会话和历史脏数据。
+- `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
+- `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
 
-## 2026-06-04 实施进度
+当前可用能力：
 
-本轮已完成五项 P0/P1 功能的第一阶段工程落地，并已通过本地验证：
+- Quick / Council 两种对话模式可用，支持 resume / retry / fork / branch 等基础恢复路径。
+- 会话列表具备时间分组、搜索、收藏、归档、标签、置顶、批量操作和 saved views 基础能力。
+- 会话内搜索、左侧历史搜索、命中跳转、长会话虚拟滚动试点已可支撑日常定位。
+- Context preview / replay / policy / memory / pin / exclude 已构成基础上下文管理链路。
+- Markdown、代码、表格、Mermaid、KaTeX/LaTeX 渲染已具备增强操作和懒渲染基础。
+- Markdown export 已具备恢复路径属性：即使历史会话存在部分中断数据，也应尽量导出可读内容。
+- 后端 pytest、前端 Vitest、lint、build、Playwright smoke 已成为常规验收命令。
+- native 后端部署现在可通过 `/api/version` 和 `deploy/native/status.sh` 识别旧进程、旧 commit、PID 和启动时间。
 
-- 前端：`npm run lint` 通过。
-- 前端：`npm run build` 通过，已生成新的 `frontend/dist`。
-- 后端：`python -m py_compile backend/main.py backend/storage.py` 通过。
-- 后端关键回归：`pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py tests/test_quick_stream.py tests/test_council_failures.py tests/test_resume_stream.py -q`，18 passed。
+最近一轮验证证据：
 
-本轮实现文件：
+- `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
+- `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
+- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
+- `npm run lint`：通过。
+- `npm run build`：通过。
+- `bash deploy/native/stop-backend.sh && bash deploy/native/start-backend.sh && bash deploy/native/status.sh`：通过；status 显示 commit 与 `git rev-parse --short HEAD` 一致。
+- `npm run test:e2e`：通过，`5 passed`。
 
-- `frontend/src/App.jsx`：新增侧栏搜索结果到聊天消息的跨组件跳转状态。
-- `frontend/src/components/Sidebar.jsx` / `Sidebar.css`：新增全局会话搜索框、debounce、结果片段、来源标识、筛选联动和点击跳转。
-- `frontend/src/components/ChatInterface.jsx` / `ChatInterface.css`：扩展会话内搜索范围、接收外部 message jump、Quick/Council Summary、ErrorActionPanel 技术细节折叠、长 assistant 回答折叠。
-- `frontend/src/components/RichMarkdown.jsx` / `RichMarkdown.css`：新增代码行号、长代码折叠/展开，Copy code 保持复制原始代码。
+当前仍需关注的工程风险：
 
-补充进度：搜索命中高亮和 Sidebar 键盘导航已补齐基础版；长回答折叠已修复双层 `max-height` 冲突，`show full answer` 现在只由 `Stage3` 单层控制。第二轮已补齐 Sidebar 搜索状态持久化、当前会话搜索状态持久化、mode/files/failed/pinned/excluded 搜索过滤器、搜索 API 元数据字段，以及 RichMarkdown compact/分段缓存和 idle 完整渲染。第三轮已完成搜索结果按会话分组、命中点击 query 注入、memory 命中滚动到 Context 区、长会话消息虚拟滚动试点、表格搜索/排序/CSV 下载、代码下载与 diff 专用样式、Mermaid 预览/复制 SVG/下载 SVG/PNG，并新增 Vitest 组件测试。第四轮补齐会话内搜索与虚拟滚动的可靠性：远距离消息命中会先按估算位置滚动、强制渲染目标窗口，再在目标 DOM 挂载后精确 `scrollIntoView` 并高亮；turn 导航在虚拟滚动下改用估算 offset 更新当前 turn，避免仅依赖已挂载 anchor；新增 `ChatInterface.test.jsx` 覆盖普通会话搜索跳转和长会话虚拟滚动远端命中定位。剩余后续增强主要是更细粒度的搜索结果分面、Markdown AST 级缓存、虚拟滚动视觉 smoke、XLSX 导出和更完整的 e2e 测试。
+- 发送可靠性已有 Council / Quick smoke，但 branch/fork 后发送失败恢复还没有独立 Playwright 用例。
+- RichMarkdown 已有组件级富内容 fixture，但还缺一个页面级“含公式 + Mermaid 的真实会话”smoke。
+- 数据备份和恢复流程还没有文档化，旧 conversation JSON 的运维恢复路径仍靠经验。
+- `App.jsx`、`storage.py`、`RichMarkdown.jsx` 仍承担较多职责，后续功能继续堆叠会提高回归概率。
 
-## 1. 会话内全文搜索和跳转
+## 下一轮优先级
 
-优先级：P0
+### P0：剩余可靠性缺口
 
-当前状态：已完成第一版落地。聊天区顶部搜索会本地遍历当前 `conversation.messages`，支持用户消息、assistant 最终回答、Stage1/Stage2 内容、附件名和 metadata；Prev/Next/当前片段点击都会复用 message anchor 滚动并高亮，切换会话会重置搜索状态。
+目标：补齐上一轮 P0 中尚未覆盖的页面级和运维级保护，避免局部测试通过但真实长会话/恢复场景仍失效。
 
-### 目标
+1. Branch / fork 发送可靠性 smoke。
+   - 使用现有 fork API 创建 branch，再覆盖 Council / Quick 的失败恢复草稿和成功清空路径。
+   - 验证 branch 已选择、branch 未选择、会话切换后的发送不会把草稿丢失或写入错误会话。
+   - 验证重复点击发送不会产生重复 user message。
 
-让用户在当前长会话中快速定位历史内容，并能在多个命中之间跳转。当前已有 turn 导航、message anchor 和消息高亮基础，因此这是下一轮性价比最高的任务。
+   验收标准：branch 场景下没有实际创建 user message / assistant placeholder 时，输入框必须恢复原草稿；成功发送后才清空草稿。
 
-### 当前基础
+2. 富内容页面级 smoke。
+   - 创建或拦截一个含标准 LaTeX、松散公式和 Mermaid 的测试会话。
+   - 等待 KaTeX/Mermaid 渲染节点出现。
+   - 断言没有 `.error` 状态、没有空白 Mermaid 容器，源码/错误 fallback 不影响整条消息阅读。
 
-- `ChatInterface` 已有按 turn/message 定位的机制。
-- 当前会话数据已完整保存在 `conversation.messages`。
-- assistant 消息中已有 stage3/final response、stage1、stage2 等结构化字段。
+   验收标准：真实页面路径能展示公式和 Mermaid；渲染失败时不会吞掉消息正文。
 
-### 实现范围
+3. 数据备份和恢复说明。
+   - 增加 conversations 数据目录备份命令。
+   - 文档化恢复步骤：停服务、备份当前数据、替换 JSON、重启、跑导出 smoke。
+   - 对 metadata 新字段保持向后兼容检查。
 
-- 在聊天区域顶部或浮动工具栏增加当前会话搜索入口。
-- 前端本地遍历当前 `conversation.messages`，先不依赖后端。
-- 支持搜索范围：
-  - 用户消息文本。
-  - assistant 最终回答。
-  - 文件名和文件 metadata。
-  - 可选：stage1 / stage2 / council details。
-- 生成 `matches[]`：
-  - `messageIndex`。
-  - `role`。
-  - `snippet`。
-  - `matchCount`。
-- 支持上一个/下一个命中跳转。
-- 跳转时复用现有 message anchor，并短暂高亮目标消息。
+   验收标准：旧 conversation JSON 缺字段时列表、详情、导出均不崩溃；恢复流程可按文档执行。
 
-### 非目标
+4. 回归命令文档化。
+   - 在 README 或 docs 中列出快速验收、提交前验收、发布前验收三档命令。
+   - 明确后端 export/version/metadata、stream/fork、前端 ChatInterface/RichMarkdown、lint/build、Playwright smoke 的使用场景。
 
-- 第一版不做后端索引。
-- 第一版不做复杂正则搜索。
-- 第一版不做全文分词和语义搜索。
+   验收标准：每次修复可以选择合适测试层级，而不是只靠手工试。
 
-### 验收标准
+### P1：高频使用效率
 
-- 输入关键词后能列出当前会话命中数量。
-- 点击或按上下按钮能跳转到对应消息。
-- 当前命中消息有明显但不干扰阅读的高亮。
-- 切换会话时搜索状态正确重置。
-- 空搜索、无命中、超长会话均不报错。
+目标：提升长时间使用后的定位、整理、诊断和输入效率。
 
-### 测试建议
+1. 会话管理继续产品化。
+   - 搜索结果增加更多分面：tag、favorite、archive、pinned、failed、files、memory。
+   - 搜索结果组内批量展开/收起，命中片段高亮更稳定。
+   - 批量整理增加撤销提示或最近操作记录。
 
-- 前端构建和 lint。
-- 手工 smoke：长会话中搜索用户消息、assistant 最终回答、文件名。
-- 可补组件级测试：给定 messages，搜索函数返回正确 `messageIndex/snippet`。
+   验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。
 
-## 2. 左侧会话搜索产品化
+2. Council 可解释性。
+   - 在最终回答旁提供简洁贡献摘要：成功模型、失败模型、关键观点来源、是否 fallback。
+   - 对部分失败、all failed、chairman fallback、context limit、disabled model 给出不同提示。
+   - 汇总 duration、tokens、fallback attempts；usage 不完整时明确标注。
 
-优先级：P0
+   验收标准：不展开 Stage1/Stage2 也能判断本轮是否可信、是否值得重试。
 
-当前状态：已完成第一版落地。Sidebar 新增历史会话搜索框，250ms debounce 后调用现有 `/api/conversations/search`；结果显示会话标题、来源/角色/消息序号和 excerpt；点击结果可打开目标会话并跳转到 `message_index`。搜索结果会按当前 Active/Archived、Favorite only、tag 过滤器裁剪，API 失败时显示轻量错误提示。
+3. Provider 和错误诊断产品化。
+   - ErrorActionPanel 根据错误类型给出入口：LLM settings、Context Policy、provider diagnostics、retry/resume。
+   - 增加只读 provider diagnostics：base URL、认证、模型列表、限流、超时。
+   - 对配置错误和网络错误给出可复制诊断信息。
 
-### 目标
+   验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。
 
-把已有后端 conversation search 从 context 面板能力提升为日常找会话入口。用户应能在左侧直接搜索历史会话，看到命中片段，并点击跳转到具体会话和消息。
+4. 长会话性能和富内容效率。
+   - 强化虚拟滚动：远距离搜索命中、turn 跳转、streaming 自动滚动、移动端窄屏。
+   - 评估 Markdown AST 缓存，减少同一消息重复 parse。
+   - Mermaid / KaTeX 改成更细的块级懒渲染和错误缓存。
+   - 表格增加 XLSX 导出、列宽控制、表内命中计数。
 
-### 当前基础
+   验收标准：100+ turn 会话打开、搜索、跳转、滚动不卡到不可用；富内容不阻塞首屏交互。
 
-- 后端已有 `/api/conversations/search`。
-- `tests/test_conversation_search_api.py` 已覆盖基础搜索。
-- `ConversationContext.jsx` 已能展示历史搜索结果并保存为 memory。
-- Sidebar 已有会话分组、收藏、标签、归档、置顶筛选。
+5. 输入工作流。
+   - 草稿按 conversation 持久化，包含输入文本、模式选择和待上传文件队列。
+   - Retry with edit 完整化：重试前显示将发送内容、上下文范围、模式变化。
+   - 增加 `/` 命令菜单和本地 prompt 模板：总结、翻译、代码 review、debug、测试生成、文档整理。
 
-### 实现范围
+   验收标准：切换会话不丢未发送输入；常用 prompt 可键盘快速插入；重试前能确认上下文。
 
-- Sidebar 增加搜索框。
-- 输入 debounce 后调用现有 search API。
-- 搜索结果显示：
-  - 会话标题。
-  - source 类型：message / memory / summary 等。
-  - role。
-  - message index。
-  - excerpt 命中片段。
-- 点击结果：
-  - 如果不是当前会话，先切换到目标 conversation。
-  - 再把 `targetMessageIndex` 传给聊天区定位并高亮。
-- 支持基础过滤：
-  - Active / Archived 复用现有视图。
-  - Favorite only 复用现有筛选。
-  - tag 复用现有筛选。
+### P2：工程结构和长期维护
 
-### 后续增强
+目标：降低继续迭代时的改动风险，让常见功能有清晰落点。
 
-当前第二轮已完成：命中词高亮、mode 过滤、has file / pinned / failed / context excluded 过滤、键盘导航、搜索条件持久化。
+1. 前端状态边界整理。
+   - 从 `App.jsx` 中拆出 conversation selection、send lifecycle、export/download、draft restore 等 hook。
+   - `ChatInterface` 继续拆分搜索、composer、message list、error recovery 子模块。
+   - 拆分前先补组件测试，避免行为回归。
 
-剩余后续增强：
+   验收标准：新增发送或导出功能时，不需要在单个巨型组件里跨多段状态修改。
 
-- 搜索结果按会话分组。
-- has provider audit / has memory / has image 等更细筛选。
-- 搜索状态导出或保存为快捷视图。
-- 组件级测试。
+2. 后端存储和导出模块化。
+   - 从 `storage.py` 中拆出 export serializer、metadata migration、search/context audit 边界。
+   - 导出逻辑保留纯函数入口，便于 fixture 测试。
+   - 对旧 JSON schema 做集中 normalize。
 
-### 非目标
+   验收标准：新增导出格式或 metadata 字段时，有明确模块和测试入口。
 
-- 第一版不做语义检索。
-- 第一版不做跨设备索引。
-- 第一版不引入外部搜索引擎。
+3. RichMarkdown 解析边界整理。
+   - 将 block math、inline math、Mermaid、table/code utilities 分成小 helper，并保留测试覆盖。
+   - 明确“显式分隔符”和“松散模型输出启发式”的规则，避免后续误改。
 
-### 验收标准
+   验收标准：富内容支持继续扩展时，不会把普通 Markdown 误解析为公式或图表。
 
-- 左侧输入关键词能返回搜索结果。
-- 点击搜索结果能打开目标会话。
-- 若结果包含 message index，聊天区能滚动到对应消息。
-- 搜索不影响已有 Active/Archived、收藏、标签筛选的基本使用。
-- API 失败时有轻量错误提示，不导致 Sidebar 崩溃。
+## 建议执行顺序
 
-### 测试建议
+1. 补 `P0-1` Branch / fork 发送可靠性 smoke。
+   - 原因：发送草稿恢复已经覆盖普通 Council / Quick，branch 是同一核心路径里剩下的高风险分支。
 
-- 后端沿用并扩展 search API 测试，目前已覆盖搜索结果 metadata：mode、tags、favorite、conversation_pinned、has_files。
-- 前端 smoke：搜索标题、用户消息、assistant 回答、memory。
-- 构造 archived/favorite/tag 会话，检查筛选与搜索结果组合行为。
+2. 补 `P0-2` 富内容页面级 smoke。
+   - 原因：组件测试已经精确锁住解析数量，页面级 smoke 用来确认真实消息列表里的懒渲染、fallback 和布局没有断。
 
-## 3. Council Run Summary
+3. 完成 `P0-3` 数据备份和恢复说明。
+   - 原因：导出现在具备恢复路径属性，但运维恢复步骤还没有沉淀到文档。
 
-优先级：P1
+4. 完成 `P0-4` 回归命令文档化。
+   - 原因：当前测试矩阵已成型，应把快速/提交前/发布前验收固化，减少后续修复时的漏测。
 
-当前状态：已完成第一版落地。assistant message 顶部会显示 Council summary 或 Quick summary；Council 模式汇总 Stage1/Stage2 成功/失败数、chair model、fallback attempts、tokens、slowest duration 和模型失败数量；Quick 模式显示 quick 状态、模型、fallback/tokens/duration。Stage1/Stage2 仍默认折叠。
+5. 进入 `P1-2` Council 可解释性和 `P1-3` Provider 诊断。
+   - 原因：Council 的价值依赖“为什么可信”和“失败后怎么办”，这两项应一起设计。
 
-### 目标
+6. 推进 `P1-1` 会话管理产品化和 `P1-5` 输入工作流。
+   - 原因：它们提升长期使用效率，但应建立在核心可靠性继续稳定的基础上。
 
-让 council mode 的执行状态更容易理解。用户默认不需要展开 Stage1/Stage2 细节，也能知道本轮多模型流程是否成功、失败了几个模型、最终是否用了 fallback、耗时多少。
+7. 最后进入 `P2` 工程结构整理。
+   - 原因：等 P0/P1 的高风险路径被测试锁住后，再拆大组件和大模块更稳。
 
-### 当前基础
+## 下一轮最小交付包
 
-- `ModelStatusList` 已展示每个模型的 status、duration、first event、error_type。
-- Stage1 / Stage2 已默认折叠。
-- assistant message 中已有 `modelStatus`、`metadata`、stage results。
-- turn audit 中已有 runs。
-- 后端 fallback attempts 已有结构化记录。
+建议下一轮只拿以下 4 个任务作为一个可完成批次：
 
-### 实现范围
+1. Branch / fork 发送失败恢复和成功发送 smoke。
+2. 含公式和 Mermaid 的页面级富内容 smoke。
+3. conversations 数据备份 / 恢复文档和导出 smoke 操作说明。
+4. 标准回归命令矩阵文档化。
 
-- 在 assistant message 顶部增加 Council Run Summary 卡片或紧凑状态条。
-- 汇总内容：
-  - Stage1：成功数 / 失败数 / 总数。
-  - Stage2：成功数 / 失败数 / 总数。
-  - Stage3：最终模型、是否 fallback、attempts 数。
-  - 总耗时：优先从 metadata/runs 聚合；缺失时显示 unknown。
-  - 失败摘要：最多显示 1-2 个主要 error_type。
-- 默认展示摘要，Stage1/Stage2 继续折叠。
-- 对 quick mode 显示轻量 Quick Run Summary。
-
-### 后端增强选项
-
-第一版可纯前端聚合；如果前端聚合逻辑过散，再补后端 `duration_summary` 或 `run_summary` 字段。
-
-### 非目标
-
-- 第一版不做模型观点自动归因。
-- 第一版不要求 chairman 输出 structured claims。
-- 第一版不展示 token 成本明细，除非 provider usage 已稳定可用。
-
-### 验收标准
-
-- 正常 council 回答显示成功阶段摘要。
-- 部分模型失败但最终成功时，摘要明确显示“部分失败，不影响最终完成”。
-- Stage3 fallback 时能显示 fallback attempts。
-- quick mode 不显示 council 三阶段摘要，而显示 quick run 状态。
-- 中断、失败、恢复中的消息状态不被摘要覆盖。
-
-### 测试建议
-
-- 用已有 stage model status 测试数据补前端聚合函数测试。
-- 手工 smoke：正常 council、部分模型失败、Stage3 fallback、interrupted/resume。
-
-## 4. ErrorActionPanel
-
-优先级：P1
-
-当前状态：已完成第一版落地。failed/interrupted assistant message 会显示恢复面板，按 `disabled_model`、401/403、429、timeout/network、all_stage1_models_failed、invalid_response 等类型给出不同说明和动作；Retry、Continue 复用现有 handler，LLM Settings 可直接打开现有设置弹窗，技术细节默认折叠。
-
-### 目标
-
-把当前偏技术化的错误字段转成用户可理解、可操作的恢复建议。用户遇到失败时，应能直接选择 Retry、Continue、Open Settings、Open Context Policy 等动作，而不是读日志或猜测。
-
-### 当前基础
-
-- 后端 `openrouter.py` 已有错误分类：`timeout`、`http_status`、`network_error`、`invalid_response`、`disabled_model`、`unknown_error`。
-- fallback attempts 已记录。
-- assistant message 已有 interrupted / failed / running banner。
-- UI 已有 Continue 和 Retry from scratch。
-- LLM Settings modal 已存在。
-- Context Policy/Preview 已存在。
-
-### 实现范围
-
-- 新增前端 `ErrorActionPanel` 组件。
-- 输入：assistant message、turn audit、model status、metadata attempts。
-- 输出：
-  - 用户可读错误类型。
-  - 简短原因说明。
-  - 建议操作按钮。
-  - 可展开技术细节。
-- 错误映射：
-  - `disabled_model`：Open LLM Settings。
-  - `http_status` 401/403：Open LLM Settings。
-  - `http_status` 429：Retry later / use fallback。
-  - `timeout`：Retry / Continue。
-  - `network_error`：Retry / check provider network。
-  - `invalid_response`：Retry / switch model。
-  - context 超限类错误：Open Context Policy / Preview。
-  - interrupted：Continue / Retry from scratch。
-
-### 非目标
-
-- 第一版不自动修改模型配置。
-- 第一版不自动切换 provider，除非已有 fallback 配置。
-- 第一版不暴露完整 provider payload，仍遵循现有 redaction/audit 策略。
-
-### 验收标准
-
-- failed assistant message 显示错误恢复面板。
-- 不同 error_type 显示不同建议动作。
-- Open Settings 能打开现有 LLM Settings modal。
-- Retry / Continue 能复用现有 handler。
-- 技术细节默认折叠。
-
-### 测试建议
-
-- 组件级测试错误映射表。
-- 手工 smoke：disabled model、timeout/network error、interrupted resume。
-- 确认错误面板不会遮挡最终成功回答。
-
-## 5. 长消息折叠与代码行号
-
-优先级：P1
-
-当前状态：已完成第一版落地。长 assistant 最终回答完成后默认折叠并提供展开/收起；折叠区域保留 Markdown、表格、公式、Mermaid 等 RichMarkdown 渲染结果。代码块按行渲染行号，超过 120 行时默认展示前 80 行并可展开，Copy code 仍复制原始代码，不包含行号。
-
-### 目标
-
-改善长回答、长代码、复杂报告的阅读体验。当前已有 turn 导航和 RichMarkdown 懒渲染，但单条消息过长时仍需要更好的折叠、定位和代码阅读能力。
-
-### 当前基础
-
-- `RichMarkdown` 已支持 Markdown、表格、代码高亮、LaTeX、Mermaid。
-- 代码块已有 Copy code。
-- 大代码块已有高亮长度上限，过大时降级普通文本。
-- Stage1 / Stage2 已折叠。
-- turn navigator 已支持按 turn 跳转。
-
-### 实现范围
-
-第一阶段：长消息折叠。
-
-- 对 assistant 最终回答设置高度阈值，例如 1200px。
-- 超过阈值时默认折叠，显示渐隐遮罩和 `Expand full answer`。
-- 展开后提供 `Collapse`。
-- 折叠状态按 message index 保存在前端状态中。
-- 正在 streaming 的消息不默认折叠，完成后再判断。
-
-第二阶段：代码行号和长代码折叠。
-
-- `CodeBlock` 增加行号列。
-- 长代码块超过阈值时默认折叠，例如超过 120 行或高度超过 600px。
-- 保留 Copy code。
-- text/plain 代码块不强制高亮，但仍可显示行号。
-- diff 代码块先只显示行号，后续再做 diff 专用颜色。
-
-### 后续增强
-
-- Markdown heading outline。
-- Mermaid 已支持 Preview / Copy SVG / Download SVG / Download PNG。
-- 表格已支持 sticky header / row search / sort / Download CSV。
-- 代码 Download file。
-
-### 非目标
-
-- 已完成长会话虚拟滚动试点：超过阈值后按 message group 窗口化渲染，并保留搜索/turn 跳转的估算滚动 fallback。
-- 第一版不引入 Monaco。
-- 第一版不替换 highlight.js。
-- 第一版不做复杂代码选行复制。
-
-### 验收标准
-
-- 长 assistant 回答不会一次占满整个滚动体验。
-- 展开/折叠不丢失 Markdown、表格、公式、Mermaid 渲染结果。
-- 长代码块显示行号，并可折叠/展开。
-- Copy code 仍复制原始代码，不包含行号。
-- 构建和 lint 通过。
-
-### 测试建议
-
-- 手工 smoke：长 Markdown、长代码、Mermaid、表格、公式混合消息。
-- 前端构建和 lint。
-- 可补 `CodeBlock` 行号渲染的组件测试。
-
-## 执行建议
-
-### 推荐拆分
-
-第一批：搜索定位
-
-- 会话内全文搜索和跳转。
-- 左侧会话搜索产品化。
-
-原因：这两项共享 message index、scroll/highlight、搜索结果模型，适合一起设计。
-
-第二批：诊断解释
-
-- Council Run Summary。
-- ErrorActionPanel。
-
-原因：这两项共享 run/model status/error metadata，适合一起抽取聚合函数和展示组件。
-
-第三批：长内容阅读
-
-- 长消息折叠。
-- 代码行号和长代码折叠。
-
-原因：这两项都在消息渲染/RichMarkdown 层，完成后再考虑 Mermaid 和表格高级操作。
-
-### 风险点
-
-- 搜索跳转需要和现有 turn navigator、message anchor、归档会话切换协同。
-- Council summary 需要兼容 quick/council/resume/retry/interrupted 多种 message shape。
-- ErrorActionPanel 不能泄露 provider payload 或密钥相关信息。
-- 长消息折叠不能破坏 streaming 更新和 Markdown 懒渲染。
-
-### 完成定义
-
-一轮任务完成时应满足：
-
-- 对应功能可在 18080 当前部署入口使用。
-- 前端 lint 和 build 通过。
-- 后端涉及 API 变更时有 pytest 覆盖。
-- 至少完成一组真实会话 smoke test。
-- docs 中同步更新已完成/待完成状态。
+完成后再进入 Council 解释性和 Provider 诊断。这样可以把上一轮 P0 的剩余缺口收尾，再继续做高频效率功能。
