@@ -39,6 +39,8 @@ const problemLabel = (problem) => ({
 
 const rolesLabel = (roles = []) => roles.join(', ') || 'unassigned';
 
+const probeStatusLabel = (value) => String(value || 'unknown').replace(/_/g, ' ');
+
 export default function LLMSettingsModal({ open, onClose, api, backendVersion }) {
   const [settings, setSettings] = useState(emptySettings);
   const [defaultApiKey, setDefaultApiKey] = useState('');
@@ -50,9 +52,11 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
   const [testModel, setTestModel] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
+  const [probeResult, setProbeResult] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
+  const [isRunningProbe, setIsRunningProbe] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -67,6 +71,7 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
         ]);
         setSettings({ ...emptySettings, ...data });
         setDiagnostics(diagnosticsData);
+        setProbeResult(null);
         setDefaultApiKey('');
         setStatus('');
       } catch (error) {
@@ -193,8 +198,10 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
     }
   };
 
+  const selectedProbeModel = () => (testModel || settings.quick_model || knownModels[0] || '').trim();
+
   const handleTest = async () => {
-    const model = (testModel || settings.quick_model || knownModels[0] || '').trim();
+    const model = selectedProbeModel();
     if (!model) {
       setTestResult({ ok: false, error: 'Choose a model first.' });
       return;
@@ -209,6 +216,30 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
       setTestResult({ ok: false, error: error.message });
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const handleRunDiagnosticsProbe = async () => {
+    const model = selectedProbeModel();
+    if (!model) {
+      setProbeResult({ ok: false, error: 'Choose a model first.' });
+      return;
+    }
+    if (!api.probeLLMProviderDiagnostics) {
+      setProbeResult({ ok: false, error: 'Provider probe is unavailable in this frontend build.' });
+      return;
+    }
+
+    setIsRunningProbe(true);
+    setProbeResult(null);
+    try {
+      const result = await api.probeLLMProviderDiagnostics(model, { includeModelList: true });
+      setProbeResult(result);
+      await refreshDiagnostics();
+    } catch (error) {
+      setProbeResult({ ok: false, error: error.message });
+    } finally {
+      setIsRunningProbe(false);
     }
   };
 
@@ -240,9 +271,14 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
           <section className="settings-section settings-diagnostics-section">
             <div className="settings-section-title-row">
               <h3>Provider Diagnostics</h3>
-              <button className="settings-secondary-btn compact" onClick={refreshDiagnostics} disabled={isRefreshingDiagnostics}>
-                {isRefreshingDiagnostics ? 'Refreshing...' : 'Refresh'}
-              </button>
+              <div className="settings-diagnostics-actions">
+                <button className="settings-secondary-btn compact" onClick={refreshDiagnostics} disabled={isRefreshingDiagnostics}>
+                  {isRefreshingDiagnostics ? 'Refreshing...' : 'Refresh'}
+                </button>
+                <button className="settings-secondary-btn compact" onClick={handleRunDiagnosticsProbe} disabled={isRunningProbe}>
+                  {isRunningProbe ? 'Probing...' : 'Run Probe'}
+                </button>
+              </div>
             </div>
             {diagnostics?.error ? (
               <p className="settings-diagnostics-note">{diagnostics.error}</p>
@@ -272,6 +308,21 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
                   ))}
                 </div>
                 <p className="settings-diagnostics-note">{diagnostics.checks?.reason}</p>
+                {probeResult && (
+                  <div className={`provider-probe-result ${probeResult.error ? 'warn' : ''}`} aria-label="Provider probe result">
+                    {probeResult.error ? (
+                      <span>{probeResult.error}</span>
+                    ) : (
+                      <>
+                        <strong>Probe {probeResult.model}</strong>
+                        <span>connection {probeStatusLabel(probeResult.connection?.status)}</span>
+                        <span>model list {probeStatusLabel(probeResult.model_list?.status)}{probeResult.model_list?.model_count != null ? ` · ${probeResult.model_list.model_count} models` : ''}</span>
+                        <span>target {probeResult.model_list?.target_model_found ? 'found' : 'not confirmed'}</span>
+                        <span>rate limit {probeStatusLabel(probeResult.rate_limit?.status)}</span>
+                      </>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <p className="settings-diagnostics-note">Diagnostics unavailable.</p>

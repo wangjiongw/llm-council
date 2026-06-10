@@ -12,13 +12,15 @@ import copy
 import os
 import subprocess
 import sys
+import time
+import httpx
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 from . import storage
 from .council import run_full_council_with_history, generate_initial_title, generate_conversation_title_from_context, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
-from .llm_settings import public_llm_settings, update_llm_settings, provider_diagnostics
+from .llm_settings import public_llm_settings, update_llm_settings, provider_diagnostics, resolve_model_config
 from .openrouter import query_model
 from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
@@ -215,6 +217,12 @@ class UpdateLLMSettingsRequest(BaseModel):
 class TestLLMSettingsRequest(BaseModel):
     """Request to test a configured model connection."""
     model: str
+
+
+class ProbeLLMSettingsRequest(BaseModel):
+    """Explicit provider diagnostics probe request."""
+    model: str
+    include_model_list: bool = True
 
 
 class ConversationMetadata(BaseModel):
@@ -1068,10 +1076,162 @@ async def patch_llm_settings(request: UpdateLLMSettingsRequest):
     return update_llm_settings(updates) and public_llm_settings()
 
 
+def _probe_error_message(value: Any) -> str:
+    return str(value or "").replace("\r", " ").replace("\n", " ")[:240]
+
+
+def _rate_limit_status(connection: Dict[str, Any]) -> str:
+    if connection.get("status_code") == 429:
+        return "limited"
+    if connection.get("error_type") == "http_status" and "429" in str(connection.get("error", "")):
+        return "limited"
+    if connection.get("ok") is True:
+        return "not_limited"
+    return "unknown"
+
+
+def _models_url(base_url: str) -> str:
+    clean_base = str(base_url or "").rstrip("/")
+    if clean_base.endswith("/chat/completions"):
+        return clean_base.removesuffix("/chat/completions") + "/models"
+    return f"{clean_base}/models"
+
+
+async def _probe_provider_model_list(config: Dict[str, Any], target_model: str, timeout_seconds: float) -> Dict[str, Any]:
+    start = time.perf_counter()
+    url = _models_url(config["base_url"])
+    headers = {"Authorization": f"Bearer {config['api_key']}"}
+    try:
+        async with httpx.AsyncClient(timeout=min(timeout_seconds, 10.0)) as client:
+            response = await client.get(url, headers=headers)
+        duration = round(time.perf_counter() - start, 3)
+        if response.status_code == 429:
+            return {
+                "status": "rate_limited",
+                "ok": False,
+                "duration_seconds": duration,
+                "status_code": 429,
+                "target_model_found": False,
+                "model_count": 0,
+            }
+        if response.is_error:
+            return {
+                "status": "failed",
+                "ok": False,
+                "duration_seconds": duration,
+                "status_code": response.status_code,
+                "error": _probe_error_message(response.text),
+                "target_model_found": False,
+                "model_count": 0,
+            }
+        payload = response.json()
+        raw_models = payload.get("data") if isinstance(payload, dict) else payload
+        model_ids = []
+        if isinstance(raw_models, list):
+            for item in raw_models:
+                if isinstance(item, dict):
+                    model_id = item.get("id") or item.get("name")
+                else:
+                    model_id = item
+                if model_id:
+                    model_ids.append(str(model_id))
+        return {
+            "status": "ok",
+            "ok": True,
+            "duration_seconds": duration,
+            "status_code": response.status_code,
+            "target_model_found": target_model in model_ids,
+            "model_count": len(model_ids),
+        }
+    except httpx.TimeoutException:
+        return {
+            "status": "timeout",
+            "ok": False,
+            "duration_seconds": round(time.perf_counter() - start, 3),
+            "target_model_found": False,
+            "model_count": 0,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "ok": False,
+            "duration_seconds": round(time.perf_counter() - start, 3),
+            "error": _probe_error_message(exc),
+            "target_model_found": False,
+            "model_count": 0,
+        }
+
+
+async def _run_provider_probe(model: str, include_model_list: bool = True) -> Dict[str, Any]:
+    clean_model = model.strip()
+    if not clean_model:
+        raise HTTPException(status_code=400, detail="Model is required")
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    try:
+        config = resolve_model_config(clean_model)
+    except Exception as exc:
+        connection = {"status": "config_error", "ok": False, "error": _probe_error_message(exc)}
+        return {
+            "schema": "llm_provider_probe_v1",
+            "explicit_probe": True,
+            "generated_at": generated_at,
+            "model": clean_model,
+            "connection": connection,
+            "model_list": {"status": "skipped", "ok": False, "reason": "connection_config_error"},
+            "rate_limit": {"status": "unknown", "reason": "connection_config_error"},
+        }
+
+    response = await query_model(
+        clean_model,
+        [{"role": "user", "content": "Reply with exactly: ok"}],
+        timeout=min(float(config.get("timeout") or 30.0), 30.0),
+        provider_function="provider_diagnostics_probe",
+        call_kind="provider_diagnostics",
+        stage="diagnostics",
+    )
+    connection = {
+        "status": "ok" if response and response.get("content") else (response or {}).get("error_type") or "failed",
+        "ok": bool(response and response.get("content")),
+        "model": (response or {}).get("model") or clean_model,
+        "duration_seconds": (response or {}).get("duration_seconds"),
+        "usage_present": bool((response or {}).get("usage")),
+    }
+    if response and response.get("error_type"):
+        connection["error_type"] = response.get("error_type")
+        connection["error"] = _probe_error_message(response.get("error"))
+    if response and response.get("status_code") is not None:
+        connection["status_code"] = response.get("status_code")
+
+    model_list = {"status": "skipped", "ok": False, "reason": "not_requested"}
+    if include_model_list:
+        model_list = await _probe_provider_model_list(config, clean_model, timeout_seconds=10.0)
+
+    rate_limit_status = _rate_limit_status(connection)
+    if rate_limit_status == "unknown" and model_list.get("status") == "rate_limited":
+        rate_limit_status = "limited"
+
+    return {
+        "schema": "llm_provider_probe_v1",
+        "explicit_probe": True,
+        "generated_at": generated_at,
+        "model": clean_model,
+        "connection": connection,
+        "model_list": model_list,
+        "rate_limit": {"status": rate_limit_status},
+    }
+
+
 @app.get("/api/settings/llm/diagnostics")
 async def get_llm_provider_diagnostics():
     """Return read-only provider diagnostics with secrets redacted."""
     return provider_diagnostics()
+
+
+@app.post("/api/settings/llm/diagnostics/probe")
+async def probe_llm_provider_diagnostics(request: ProbeLLMSettingsRequest):
+    """Run an explicit provider diagnostics probe for one configured model."""
+    return await _run_provider_probe(request.model, request.include_model_list)
 
 
 @app.post("/api/settings/llm/test")

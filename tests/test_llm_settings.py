@@ -143,6 +143,111 @@ class LLMSettingsTest(unittest.TestCase):
         self.assertEqual(payload["content"], "ok")
         query_mock.assert_awaited_once()
 
+    def test_provider_diagnostics_probe_calls_model_and_model_list_explicitly(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "default_provider": {
+                "base_url": "https://provider.example/v1",
+                "api_key": "secret-key",
+                "timeout": 45,
+                "stream": False,
+            },
+            "council_models": ["probe-model"],
+            "chairman_model": "",
+            "quick_model": "",
+            "title_model": "",
+            "summarization_model": "",
+        })
+
+        class FakeModelsResponse:
+            status_code = 200
+            is_error = False
+            text = ""
+
+            def json(self):
+                return {"data": [{"id": "probe-model"}, {"id": "other-model"}]}
+
+        class FakeAsyncClient:
+            def __init__(self, timeout=None):
+                self.timeout = timeout
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, headers=None):
+                self.requested_url = url
+                self.headers = headers or {}
+                return FakeModelsResponse()
+
+        with (
+            patch("backend.main.query_model", new=AsyncMock(return_value={
+                "status": "success",
+                "model": "probe-model",
+                "content": "ok",
+                "duration_seconds": 0.2,
+                "usage": {"total_tokens": 2},
+            })) as query_mock,
+            patch("backend.main.httpx.AsyncClient", new=FakeAsyncClient),
+        ):
+            response = self.client.post(
+                "/api/settings/llm/diagnostics/probe",
+                json={"model": "probe-model", "include_model_list": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["schema"], "llm_provider_probe_v1")
+        self.assertTrue(payload["explicit_probe"])
+        self.assertTrue(payload["connection"]["ok"])
+        self.assertEqual(payload["connection"]["status"], "ok")
+        self.assertEqual(payload["rate_limit"]["status"], "not_limited")
+        self.assertTrue(payload["model_list"]["ok"])
+        self.assertEqual(payload["model_list"]["model_count"], 2)
+        self.assertTrue(payload["model_list"]["target_model_found"])
+        self.assertNotIn("secret-key", str(payload))
+        query_mock.assert_awaited_once()
+
+    def test_provider_diagnostics_probe_reports_rate_limit_without_raising(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "default_provider": {
+                "base_url": "https://provider.example/v1",
+                "api_key": "secret-key",
+                "timeout": 45,
+                "stream": False,
+            },
+            "council_models": ["limited-model"],
+            "chairman_model": "",
+            "quick_model": "",
+            "title_model": "",
+            "summarization_model": "",
+        })
+
+        with patch("backend.main.query_model", new=AsyncMock(return_value={
+            "status": "failed",
+            "model": "limited-model",
+            "content": None,
+            "error_type": "http_status",
+            "error": "429 Too Many Requests",
+            "status_code": 429,
+            "duration_seconds": 0.1,
+        })):
+            response = self.client.post(
+                "/api/settings/llm/diagnostics/probe",
+                json={"model": "limited-model", "include_model_list": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["connection"]["ok"])
+        self.assertEqual(payload["connection"]["status_code"], 429)
+        self.assertEqual(payload["rate_limit"]["status"], "limited")
+        self.assertEqual(payload["model_list"]["status"], "skipped")
+        self.assertNotIn("secret-key", str(payload))
+
     def test_empty_fallback_lists_use_implicit_nano_without_publicly_configuring_it(self):
         llm_settings.save_llm_settings({
             **llm_settings.DEFAULT_SETTINGS,

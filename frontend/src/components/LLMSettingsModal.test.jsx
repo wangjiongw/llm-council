@@ -109,4 +109,36 @@ describe('LLMSettingsModal provider diagnostics', () => {
     });
     expect(await screen.findByText('2 ready')).toBeInTheDocument();
   });
+  it('runs an explicit provider probe and renders connection, model list, and rate-limit status', async () => {
+    const user = userEvent.setup();
+    const api = {
+      getLLMSettings: vi.fn().mockResolvedValue(settingsPayload),
+      getLLMProviderDiagnostics: vi.fn().mockResolvedValue(diagnosticsPayload),
+      probeLLMProviderDiagnostics: vi.fn().mockResolvedValue({
+        schema: 'llm_provider_probe_v1',
+        explicit_probe: true,
+        model: 'model-b',
+        connection: { ok: true, status: 'ok', duration_seconds: 0.2, usage_present: true },
+        model_list: { ok: true, status: 'ok', model_count: 24, target_model_found: true },
+        rate_limit: { status: 'not_limited' },
+      }),
+      updateLLMSettings: vi.fn(),
+      testLLMSettings: vi.fn(),
+    };
+
+    render(<LLMSettingsModal open onClose={vi.fn()} api={api} backendVersion={{}} />);
+
+    await screen.findByText('Provider Diagnostics');
+    await user.click(screen.getByRole('button', { name: /Run Probe/i }));
+
+    await waitFor(() => {
+      expect(api.probeLLMProviderDiagnostics).toHaveBeenCalledWith('model-b', { includeModelList: true });
+    });
+    expect(await screen.findByLabelText('Provider probe result')).toHaveTextContent('Probe model-b');
+    expect(screen.getByText('connection ok')).toBeInTheDocument();
+    expect(screen.getByText('model list ok · 24 models')).toBeInTheDocument();
+    expect(screen.getByText('target found')).toBeInTheDocument();
+    expect(screen.getByText('rate limit not limited')).toBeInTheDocument();
+  });
+
 });

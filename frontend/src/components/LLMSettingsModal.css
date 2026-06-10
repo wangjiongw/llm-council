@@ -208,6 +208,13 @@
   margin: 0;
 }
 
+.settings-diagnostics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .provider-diagnostics-summary {
   display: flex;
   flex-wrap: wrap;
@@ -289,6 +296,40 @@
   color: #57606a;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.provider-probe-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid rgba(26, 127, 55, 0.28);
+  border-radius: 6px;
+  background: rgba(26, 127, 55, 0.08);
+}
+
+.provider-probe-result.warn {
+  border-color: rgba(207, 34, 46, 0.28);
+  background: rgba(207, 34, 46, 0.07);
+}
+
+.provider-probe-result strong,
+.provider-probe-result span {
+  font-size: 12px;
+}
+
+.provider-probe-result strong {
+  color: #24292f;
+}
+
+.provider-probe-result span {
+  padding: 3px 7px;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  background: #fff;
+  color: #57606a;
+  font-weight: 700;
 }
 
 .settings-secondary-btn.compact {

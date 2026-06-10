@@ -863,6 +863,27 @@ export const api = {
   },
 
   /**
+   * Run an explicit provider diagnostics probe for one model.
+   */
+  async probeLLMProviderDiagnostics(model, options = {}) {
+    const response = await fetch(`${API_BASE}/api/settings/llm/diagnostics/probe`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        include_model_list: options.includeModelList !== false,
+      }),
+    });
+    if (!response.ok) {
+      const message = await readErrorMessage(response, 'Failed to run LLM provider diagnostics probe');
+      throw new Error(message);
+    }
+    return response.json();
+  },
+
+  /**
    * Update runtime LLM settings.
    */
   async updateLLMSettings(settings) {
