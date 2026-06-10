@@ -2,7 +2,7 @@
 
 更新时间：2026-06-10
 
-本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断、核心回归保护、备份恢复说明和标准回归矩阵。P0 可靠性与回归保护已经收口；下一轮重点转为高频使用效率、Council 可解释性、Provider 诊断和后续工程结构整理。
+本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断、核心回归保护、备份恢复说明和标准回归矩阵。P0 可靠性与回归保护已收口；P1 高频使用效率第一版也已收口。下一轮重点转为 Provider diagnostics 第二版、Council Run Summary 第二版和剩余小体验增强。
 
 ## 当前状态基线
 
@@ -16,7 +16,13 @@
 - `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
 - `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
 - `cbac6aa`：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
-- 当前 P1 执行批次：完成 P1-4 长会话性能和富内容效率第一版；100+ turn 移动端 smoke 覆盖虚拟列表、远距离搜索命中和流式追加可见；RichMarkdown 缓存 Mermaid 成功/失败结果，避免重复渲染同一坏图。
+- `5316a60`：会话列表新增 failed/files/memory/pinned 分面筛选和搜索结果组级展开/收起，支撑 P1-1 第一版。
+- `6c43d32`：输入框草稿持久化 Quick/Council 模式，Retry with edit 显示模式和重建范围，支撑 P1-5 第一版。
+- `328580d`：Council Run Summary 和 Provider Diagnostics 第一版落地，支撑 P1-2 / P1-3 第一版。
+- `1571c8a`：虚拟化长会话 Bottom/streaming 滚动修复，新增 100+ turn 移动端 Playwright smoke。
+- `a967e04`：RichMarkdown 缓存 Mermaid 成功/失败结果，坏图保留错误和源码 fallback，避免重复渲染同一坏图。
+- `3d55f75`：记录 P1-4 第一版完成状态、当前源码 smoke 命令和下一轮交付包。
+- 当前执行状态：P0 已收口；P1-1 到 P1-5 第一版已全部收口；下一轮尚未开始。
 
 当前可用能力：
 
@@ -37,25 +43,29 @@
 
 最近一轮验证证据：
 
-- `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
-- `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
-- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
-- `npm test -- ChatInterface.test.jsx LLMSettingsModal.test.jsx`：通过，`13 passed`。
-- `pytest tests/test_llm_settings.py tests/test_council_failures.py -q`：通过，`13 passed`。
-- `pytest tests/test_llm_settings.py tests/test_stage_model_status_events.py tests/test_quick_stream.py -q`：通过，`14 passed`。
+本轮 P1-4 收口验证：
+
+- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`26 passed`。
 - `npm run lint`：通过。
 - `npm run build`：通过。
-- `bash deploy/native/stop-backend.sh && bash deploy/native/start-backend.sh && bash deploy/native/status.sh`：通过；status 显示 commit 与 `git rev-parse --short HEAD` 一致。
+- `git diff --check`：通过。
+- `E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"`：通过，`2 passed`；该命令使用临时 Vite dev server 验证当前源码，未重启 native/nginx。
+
+上一批 P0 / P1 第一版基线验证：
+
+- `npm run test:e2e -- -g "forked branch|formula and Mermaid"`：通过，`3 passed`。
 - `npm run test:e2e`：通过，`8 passed`。
+- `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
+- `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
 - `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
+- `pytest tests/test_llm_settings.py tests/test_council_failures.py -q`：通过，`13 passed`。
 - `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
-- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`26 passed`。
-- `E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"`：通过，`2 passed`；该命令使用临时 Vite dev server 验证当前源码。
+- `npm test -- ChatInterface.test.jsx LLMSettingsModal.test.jsx`：通过，`13 passed`。
 
 当前仍需关注的工程风险：
 
 - Playwright 发送 smoke 使用受控 SSE mock，不覆盖真实 provider outage、限流或慢响应链路。
-- 当前 native/nginx 入口可能仍运行旧静态资源；验证当前源码的 e2e 需先启动临时 Vite dev server 并设置 `E2E_BASE_URL`。
+- 当前 native/nginx 入口可能仍运行旧静态资源；本轮 P1-4 使用临时 Vite dev server 验证当前源码，发布前仍需按 native 路径重启并跑完整 e2e。
 - 输入工作流第一版暂不持久化待上传文件队列，`/` 命令菜单也尚未落地；当前仅提供本地模板选择入口。
 - 会话管理第一版覆盖 failed/files/memory/pinned 常用分面和搜索结果组级展开/收起；tag/favorite/archive 搜索分面、批量整理撤销仍待后续。
 - 备份/恢复文档已经固化，但尚未在一次真实历史备份恢复演练中执行全流程。
@@ -88,10 +98,6 @@
 
 - `npm run test:e2e -- -g "forked branch|formula and Mermaid"`：通过，`3 passed`。
 - `npm run test:e2e`：通过，`8 passed`。
-- `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
-- `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
-- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`26 passed`。
-- `E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"`：通过，`2 passed`；该命令使用临时 Vite dev server 验证当前源码。
 - `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
 - `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
 - `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
@@ -187,7 +193,7 @@
 
 ## 下一轮最小交付包
 
-建议下一轮只拿以下 4 个任务作为一个可完成批次：
+建议下一轮只拿以下 4 个任务作为一个可完成批次；当前尚未开始：
 
 1. Provider diagnostics 第二版：显式触发真实连接/模型列表/限流探测，不作为默认只读诊断。
 2. Council Run Summary 第二版：关键观点来源引用、usage 缺失标注、all failed/chairman fallback 专门文案。
