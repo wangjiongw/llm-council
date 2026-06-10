@@ -27,6 +27,13 @@ cd frontend
 npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx LLMSettingsModal.test.jsx
 ```
 
+前端会话管理 / 输入工作流：
+
+```bash
+cd frontend
+npm test -- ChatInterface.test.jsx Sidebar.test.jsx
+```
+
 ## 提交前验收
 
 适用：任何会影响发送、导出、渲染、部署诊断或主页面状态的代码改动。
@@ -36,6 +43,7 @@ pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/tes
 pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q
 cd frontend
 npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx LLMSettingsModal.test.jsx
+npm test -- ChatInterface.test.jsx Sidebar.test.jsx
 npm run lint
 npm run build
 ```
@@ -45,6 +53,7 @@ npm run build
 ```bash
 cd frontend
 npm test -- Sidebar.test.jsx
+cd ..
 pytest tests/test_conversation_search_api.py -q
 ```
 

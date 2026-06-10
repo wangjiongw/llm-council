@@ -6,7 +6,7 @@
 
 ## 当前状态基线
 
-当前代码已完成并提交以下近期修复与保护：
+当前代码已完成以下近期修复与保护：
 
 - `cefec19`：后续对话发送被拒时不再清空草稿，只有消息真正被接受发送后才清空输入框。
 - `78a2e3e`：Markdown 导出支持中文会话标题文件名，能处理不完整 assistant stage，并输出更可读的 transcript。
@@ -16,16 +16,18 @@
 - `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
 - `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
 - `cbac6aa`：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
-- 当前 P1 执行批次：补齐 Council Run Summary 组件测试；新增只读 `/api/settings/llm/diagnostics`；设置弹窗展示 provider diagnostics；provider 相关错误可直达诊断入口。
+- 当前 P1 执行批次：完成会话管理分面第一版和输入工作流第一版；会话列表支持 failed/files/memory/pinned 分面，搜索结果支持组级展开/收起；输入框支持模式随草稿持久化、Retry with edit 预览和本地 prompt 模板入口。
 
 当前可用能力：
 
 - Quick / Council 两种对话模式可用，支持 resume / retry / fork / branch 等基础恢复路径。
-- 会话列表具备时间分组、搜索、收藏、归档、标签、置顶、批量操作和 saved views 基础能力。
-- 会话内搜索、左侧历史搜索、命中跳转、长会话虚拟滚动试点已可支撑日常定位。
+- 会话列表具备时间分组、搜索、收藏、归档、标签、置顶、批量操作、saved views 和 failed/files/memory/pinned 分面筛选基础能力。
+- 会话内搜索、左侧历史搜索、命中跳转、搜索结果组级展开/收起、长会话虚拟滚动试点已可支撑日常定位。
 - Context preview / replay / policy / memory / pin / exclude 已构成基础上下文管理链路。
 - Markdown、代码、表格、Mermaid、KaTeX/LaTeX 渲染已具备增强操作和懒渲染基础。
 - Markdown export 已具备恢复路径属性：即使历史会话存在部分中断数据，也应尽量导出可读内容。
+- 输入框草稿按 conversation 保存输入文本和 Quick/Council 模式，兼容旧纯文本草稿；Retry with edit 会显示将使用的模式、内容长度和重建 turn。
+- 本地 prompt 模板入口已提供总结、翻译、代码 review、debug、测试生成和文档整理模板。
 - 后端 pytest、前端 Vitest、lint、build、Playwright smoke 已成为常规验收命令。
 - native 后端部署现在可通过 `/api/version` 和 `deploy/native/status.sh` 识别旧进程、旧 commit、PID 和启动时间。
 - 设置弹窗现在提供只读 Provider Diagnostics，显示配置模型、base URL、API key 是否配置、timeout、stream/enabled 状态和缺配置问题；该诊断不调用 provider、不暴露 secrets。
@@ -45,10 +47,14 @@
 - `npm run build`：通过。
 - `bash deploy/native/stop-backend.sh && bash deploy/native/start-backend.sh && bash deploy/native/status.sh`：通过；status 显示 commit 与 `git rev-parse --short HEAD` 一致。
 - `npm run test:e2e`：通过，`8 passed`。
+- `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
+- `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
 
 当前仍需关注的工程风险：
 
 - Playwright 发送 smoke 使用受控 SSE mock，不覆盖真实 provider outage、限流或慢响应链路。
+- 输入工作流第一版暂不持久化待上传文件队列，`/` 命令菜单也尚未落地；当前仅提供本地模板选择入口。
+- 会话管理第一版覆盖 failed/files/memory/pinned 常用分面和搜索结果组级展开/收起；tag/favorite/archive 搜索分面、批量整理撤销仍待后续。
 - 备份/恢复文档已经固化，但尚未在一次真实历史备份恢复演练中执行全流程。
 - `App.jsx`、`storage.py`、`RichMarkdown.jsx` 仍承担较多职责，后续功能继续堆叠会提高回归概率。
 
@@ -79,6 +85,8 @@
 
 - `npm run test:e2e -- -g "forked branch|formula and Mermaid"`：通过，`3 passed`。
 - `npm run test:e2e`：通过，`8 passed`。
+- `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
+- `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
 - `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
 - `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
 - `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
@@ -90,11 +98,12 @@
 目标：提升长时间使用后的定位、整理、诊断和输入效率。
 
 1. 会话管理继续产品化。
-   - 搜索结果增加更多分面：tag、favorite、archive、pinned、failed、files、memory。
-   - 搜索结果组内批量展开/收起，命中片段高亮更稳定。
-   - 批量整理增加撤销提示或最近操作记录。
+   - 第一版已完成：后端会话 metadata 暴露 `has_files`、`has_failed_run`、`has_memory`、`pinned_message_count`。
+   - 第一版已完成：会话列表支持 failed/files/memory/pinned 分面筛选，saved views 会保存这些筛选条件。
+   - 第一版已完成：搜索结果支持组级 Expand all / Collapse all，并保持高亮命中片段可读。
+   - 后续可继续增强：tag/favorite/archive 搜索分面、批量整理撤销提示或最近操作记录。
 
-   验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。
+   验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。当前第一版已满足常用分面筛选和搜索结果组操作。
 
 2. Council 可解释性。
    - 第一版已完成：最终回答旁已有 Council Run Summary，展示 Stage 1/2 成功失败数、chair 模型、失败模型数、fallback attempt、tokens、slowest duration 和 warnings。
@@ -119,11 +128,13 @@
    验收标准：100+ turn 会话打开、搜索、跳转、滚动不卡到不可用；富内容不阻塞首屏交互。
 
 5. 输入工作流。
-   - 草稿按 conversation 持久化，包含输入文本、模式选择和待上传文件队列。
-   - Retry with edit 完整化：重试前显示将发送内容、上下文范围、模式变化。
-   - 增加 `/` 命令菜单和本地 prompt 模板：总结、翻译、代码 review、debug、测试生成、文档整理。
+   - 第一版已完成：草稿按 conversation 持久化输入文本和 Quick/Council 模式，并兼容旧纯文本草稿。
+   - 第一版已完成：Enter 使用当前模式发送，Ctrl/Cmd+Enter 使用备用模式；发送成功后只清空内容、不清空模式偏好。
+   - 第一版已完成：Retry with edit 显示将发送的模式、字符数和上下文重建起点。
+   - 第一版已完成：新增本地 prompt 模板入口，覆盖总结、翻译、代码 review、debug、测试生成、文档整理。
+   - 后续可继续增强：待上传文件队列持久化、`/` 命令菜单和完整键盘模板选择。
 
-   验收标准：切换会话不丢未发送输入；常用 prompt 可键盘快速插入；重试前能确认上下文。
+   验收标准：切换会话不丢未发送输入；常用 prompt 可快速插入；重试前能确认上下文。当前第一版已满足模式草稿、重试预览和模板入口。
 
 ### P2：工程结构和长期维护
 
@@ -155,22 +166,26 @@
    - 已落地 Council Run Summary 测试、只读 provider diagnostics API、设置弹窗诊断面板和错误入口。
    - 后续增强项保留为真实 provider 探测、关键观点来源引用和 usage 缺失标注。
 
-2. 推进 `P1-1` 会话管理产品化和 `P1-5` 输入工作流。
-   - 原因：它们提升长期使用效率，并已建立 P0 可靠性测试护栏。
+2. `P1-1` 会话管理产品化和 `P1-5` 输入工作流第一版已完成。
+   - 已落地 failed/files/memory/pinned 会话分面、搜索结果组级展开/收起、模式草稿持久化、Retry with edit 预览和本地 prompt 模板入口。
+   - 后续增强项保留为搜索 tag/favorite/archive 分面、批量整理撤销、文件队列持久化和 `/` 命令菜单。
 
-3. 推进 `P1-4` 长会话性能和富内容效率。
+3. 下一步推进 `P1-4` 长会话性能和富内容效率。
    - 原因：页面级 rich content smoke 已建立，后续可以更安全地优化懒渲染和缓存。
 
-4. 最后进入 `P2` 工程结构整理。
+4. 再回到 `P1-2` / `P1-3` 第二版增强。
+   - 原因：真实 provider 探测会产生外部调用，Council 来源引用也需要更稳定的展示模型，适合在高频使用效率完成后单独推进。
+
+5. 最后进入 `P2` 工程结构整理。
    - 原因：等 P1 的产品行为更稳定后，再拆大组件和大模块更稳。
 
 ## 下一轮最小交付包
 
 建议下一轮只拿以下 4 个任务作为一个可完成批次：
 
-1. 会话管理分面增强：failed/files/memory/pinned 等筛选和 grouped result 操作。
-2. 输入工作流第一版：模式草稿持久化、retry with edit 预览、本地 prompt 模板入口。
-3. Provider diagnostics 第二版：显式触发的真实连接/模型列表/限流探测，不作为默认只读诊断。
-4. Council Run Summary 第二版：关键观点来源引用、usage 缺失标注、all failed/chairman fallback 专门文案。
+1. `P1-4` 长会话性能 smoke 扩展：100+ turn fixture、远距离搜索命中跳转、streaming 自动滚动和移动端窄屏检查。
+2. 富内容效率第一版：评估 Markdown parse 缓存边界，给 Mermaid / KaTeX 懒渲染和错误缓存补组件级保护。
+3. 会话管理剩余小项：tag/favorite/archive 搜索分面、批量整理撤销提示或最近操作记录。
+4. 输入工作流剩余小项：待上传文件队列持久化和 `/` 命令菜单。
 
-P0 可靠性批次已收口；P1 可解释性和 Provider 诊断第一版已完成。下一轮建议进入会话管理和输入工作流。
+P0 可靠性批次已收口；P1 可解释性、Provider 诊断第一版、会话管理第一版和输入工作流第一版已完成。下一轮建议进入长会话性能和富内容效率。
