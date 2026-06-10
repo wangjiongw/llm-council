@@ -2,7 +2,7 @@
 
 更新时间：2026-06-10
 
-本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断、核心回归保护、备份恢复说明和标准回归矩阵。P0 可靠性与回归保护已收口；P1 高频使用效率第一版也已收口。下一轮重点转为 Provider diagnostics 第二版、Council Run Summary 第二版和剩余小体验增强。
+本文记录当前工程状态和下一轮任务规划。项目已经具备稳定的 Quick / Council 对话、会话管理、搜索、富 Markdown 渲染、导出、运行时诊断、核心回归保护、备份恢复说明和标准回归矩阵。P0 可靠性与回归保护已收口；P1 高频使用效率第一版和第二版最小交付包也已全部收口。当前版本可作为新的稳定项目版本继续进入 P2 工程结构整理。
 
 ## 当前状态基线
 
@@ -22,7 +22,10 @@
 - `1571c8a`：虚拟化长会话 Bottom/streaming 滚动修复，新增 100+ turn 移动端 Playwright smoke。
 - `a967e04`：RichMarkdown 缓存 Mermaid 成功/失败结果，坏图保留错误和源码 fallback，避免重复渲染同一坏图。
 - `3d55f75`：记录 P1-4 第一版完成状态、当前源码 smoke 命令和下一轮交付包。
-- 当前执行状态：P0 已收口；P1-1 到 P1-5 第一版已全部收口；下一轮尚未开始。
+- `7f2a99b`：Provider diagnostics 第二版落地，新增显式 provider probe API、前端 Run Probe 入口和 connection/model-list/rate-limit 展示。
+- `3885dde`：会话管理剩余小项落地，新增搜索结果 favorite/tagged 分面、saved view 白名单和批量 metadata 操作 Undo。
+- `8669ab4`：Council Run Summary 第二版、输入工作流剩余小项和长会话 autoscroll 回归修复落地，包括来源引用、usage 缺失、文件队列持久化提示和 `/` 命令菜单。
+- 当前执行状态：P0 已收口；P1-1 到 P1-5 第一版和第二版最小交付包已全部收口；当前版本通过后端、前端、lint、build 和 Playwright smoke 验证。
 
 当前可用能力：
 
@@ -38,10 +41,24 @@
 - native 后端部署现在可通过 `/api/version` 和 `deploy/native/status.sh` 识别旧进程、旧 commit、PID 和启动时间。
 - 设置弹窗现在提供只读 Provider Diagnostics，显示配置模型、base URL、API key 是否配置、timeout、stream/enabled 状态和缺配置问题；该诊断不调用 provider、不暴露 secrets。
 - Council Run Summary 已有组件级回归，覆盖成功/失败模型、fallback attempt、tokens、duration 和 warnings。
+- Provider Diagnostics 第二版已新增显式外部 probe：用户点击 Run Probe 后才调用模型连接和 OpenAI-compatible `/models` 列表探测，并显示 connection、model list、target found 和 rate-limit 状态。
+- Council Run Summary 第二版已新增关键来源引用、usage 缺失标注、Stage 1 全失败提示、chair fallback used/exhausted 提示。
+- 会话管理第二版已新增搜索结果 Favorite / Tagged 分面，Active / Archived / tag / favorite 过滤会作用到搜索结果，批量整理会记录最近操作并支持 Undo。
+- 输入工作流第二版已新增待上传文件队列持久化、恢复文件重新附加提示、防 metadata-only 文件误发和 `/` 命令菜单。
+- 长会话虚拟滚动已补新增 turn 后自动滚到底部的组件测试和 100+ turn mobile smoke 回归。
 - 备份/恢复流程见 `docs/conversation-backup-recovery.md`。
 - 快速验收、提交前验收、发布前验收命令矩阵见 `docs/regression-matrix.md`。
 
 最近一轮验证证据：
+
+本轮 P1 第二版收口验证：
+
+- `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py tests/test_file_upload_api.py tests/test_llm_settings.py tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`44 passed, 5 subtests passed`。
+- `npm test -- ChatInterface.test.jsx Sidebar.test.jsx LLMSettingsModal.test.jsx RichMarkdown.test.jsx`：通过，`45 passed`。
+- `npm run lint`：通过。
+- `npm run build`：通过。
+- `git diff --check`：通过。
+- `E2E_BASE_URL=http://127.0.0.1:18180 npm run test:e2e`：通过，`9 passed`；该命令使用临时 Vite dev server 验证当前源码，未重启 native/nginx。
 
 本轮 P1-4 收口验证：
 
@@ -66,8 +83,8 @@
 
 - Playwright 发送 smoke 使用受控 SSE mock，不覆盖真实 provider outage、限流或慢响应链路。
 - 当前 native/nginx 入口可能仍运行旧静态资源；本轮 P1-4 使用临时 Vite dev server 验证当前源码，发布前仍需按 native 路径重启并跑完整 e2e。
-- 输入工作流第一版暂不持久化待上传文件队列，`/` 命令菜单也尚未落地；当前仅提供本地模板选择入口。
-- 会话管理第一版覆盖 failed/files/memory/pinned 常用分面和搜索结果组级展开/收起；tag/favorite/archive 搜索分面、批量整理撤销仍待后续。
+- 输入工作流第二版已稳定：待上传文件队列会随会话持久化，恢复的 metadata-only 文件会显示重新附加提示并阻止误发送，`/` 命令菜单可快速插入本地 prompt 模板。
+- 会话管理第二版已覆盖 tag/favorite/archive 搜索整理路径和批量整理 Undo；saved views 可保存新增搜索分面。
 - 备份/恢复文档已经固化，但尚未在一次真实历史备份恢复演练中执行全流程。
 - `App.jsx`、`storage.py`、`RichMarkdown.jsx` 仍承担较多职责，后续功能继续堆叠会提高回归概率。
 
@@ -112,23 +129,27 @@
    - 第一版已完成：后端会话 metadata 暴露 `has_files`、`has_failed_run`、`has_memory`、`pinned_message_count`。
    - 第一版已完成：会话列表支持 failed/files/memory/pinned 分面筛选，saved views 会保存这些筛选条件。
    - 第一版已完成：搜索结果支持组级 Expand all / Collapse all，并保持高亮命中片段可读。
-   - 后续可继续增强：tag/favorite/archive 搜索分面、批量整理撤销提示或最近操作记录。
+   - 第二版已完成：搜索结果支持 Favorite / Tagged 分面；Active / Archived / tag / favorite 过滤会作用于搜索结果；saved views 保留新增 search flags。
+   - 第二版已完成：批量 Favorite / Archive / tag 操作显示最近操作并可 Undo 到每个会话的原始 metadata 快照。
 
-   验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。当前第一版已满足常用分面筛选和搜索结果组操作。
+   验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。当前第二版已满足常用分面筛选、搜索结果组操作和批量整理回滚。
 
 2. Council 可解释性。
    - 第一版已完成：最终回答旁已有 Council Run Summary，展示 Stage 1/2 成功失败数、chair 模型、失败模型数、fallback attempt、tokens、slowest duration 和 warnings。
-   - 第一版已补组件测试，覆盖成功模型、失败模型、fallback attempt、tokens、duration 和 warning。
-   - 后续可继续增强：关键观点来源的更细粒度引用、usage 缺失时的显式标注、all failed/chairman fallback 的更细文案。
+   - 第二版已完成：关键观点来源引用、usage 缺失时的显式标注、Stage 1 全失败文案、chair fallback used/exhausted 文案。
+   - 第二版已补组件测试，覆盖来源引用、usage missing、fallback used/exhausted 和 all Stage 1 failed。
+   - 后续仍可继续增强：来源引用可进一步从 aggregate ranking 扩展到更细粒度 statement-level 引用。
 
-   验收标准：不展开 Stage1/Stage2 也能判断本轮是否可信、是否值得重试。当前第一版已满足主要路径。
+   验收标准：不展开 Stage1/Stage2 也能判断本轮是否可信、是否值得重试。当前第二版已满足主要路径并通过完整回归矩阵。
 
 3. Provider 和错误诊断产品化。
    - 第一版已完成：新增只读 `/api/settings/llm/diagnostics`，返回配置模型、角色、base URL、key 是否配置、timeout、stream/enabled、问题列表和 read-only 检查状态。
    - 第一版已完成：设置弹窗展示 Provider Diagnostics；provider 相关错误面板提供 Provider Diagnostics 入口；技术细节仍可复制。
-   - 后续可继续增强：真实 provider 模型列表探测、限流探测和网络连通性探测需要显式用户触发，避免只读诊断产生外部调用。
+   - 第二版已完成：新增显式 `/api/settings/llm/diagnostics/probe`，点击 Run Probe 时才进行真实模型连接和模型列表探测，并返回 rate-limit 状态。
+   - 第二版已补后端和前端组件测试，覆盖正常 probe、429 限流、模型列表和 UI 展示。
+   - 后续仍可继续增强：把 probe 结果接入更多 provider 错误面板和运行日志，但默认只读诊断仍保持无外部调用。
 
-   验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。当前配置类和 provider 错误入口第一版已完成。
+   验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。当前第二版已覆盖显式真实探测路径并通过完整回归矩阵。
 
 4. 长会话性能和富内容效率。
    - 第一版已完成：100+ turn 移动端 Playwright smoke 覆盖虚拟列表、远距离搜索命中、Bottom 导航和 Quick stream 追加可见。
@@ -143,9 +164,10 @@
    - 第一版已完成：Enter 使用当前模式发送，Ctrl/Cmd+Enter 使用备用模式；发送成功后只清空内容、不清空模式偏好。
    - 第一版已完成：Retry with edit 显示将发送的模式、字符数和上下文重建起点。
    - 第一版已完成：新增本地 prompt 模板入口，覆盖总结、翻译、代码 review、debug、测试生成、文档整理。
-   - 后续可继续增强：待上传文件队列持久化、`/` 命令菜单和完整键盘模板选择。
+   - 第二版已完成：待上传文件队列持久化已接入当前会话加载、file queue API 保存/恢复，以及发送前阻止 metadata-only 文件直接发送。
+   - 第二版已完成：恢复后的文件显示重新附加提示，删除/重新上传路径有组件回归，`/` 命令菜单可点击或 Enter 插入本地 prompt 模板。
 
-   验收标准：切换会话不丢未发送输入；常用 prompt 可快速插入；重试前能确认上下文。当前第一版已满足模式草稿、重试预览和模板入口。
+   验收标准：切换会话不丢未发送输入；常用 prompt 可快速插入；重试前能确认上下文。当前第二版已满足模式草稿、重试预览、模板入口、文件队列持久化和 `/` 命令菜单。
 
 ### P2：工程结构和长期维护
 
@@ -185,19 +207,22 @@
    - 已落地虚拟化 Bottom/streaming 可见性修复、100+ turn 移动端 smoke、Mermaid 成功/失败 bounded cache 和错误 fallback 回归。
    - 后续增强项保留为 Markdown AST 更细缓存、KaTeX/Mermaid 统计、表格 XLSX/列宽/命中计数。
 
-4. 下一步回到 `P1-2` / `P1-3` 第二版增强。
-   - 原因：真实 provider 探测会产生外部调用，Council 来源引用也需要更稳定的展示模型，适合在高频使用效率完成后单独推进。
+4. 下一轮最小交付包已完成。
+   - `P1-3` Provider diagnostics 第二版：已提交并通过完整矩阵。
+   - `P1-2` Council Run Summary 第二版：已提交并通过完整矩阵。
+   - `P1-5` 输入工作流剩余小项：文件队列持久化和 `/` 命令菜单已提交并通过完整矩阵。
+   - `P1-1` 会话管理剩余小项：tag/favorite/archive 搜索整理路径和批量 Undo 已提交并通过完整矩阵。
 
-5. 最后进入 `P2` 工程结构整理。
+5. 下一步进入 `P2` 工程结构整理。
    - 原因：等 P1 的产品行为更稳定后，再拆大组件和大模块更稳。
 
 ## 下一轮最小交付包
 
-建议下一轮只拿以下 4 个任务作为一个可完成批次；当前尚未开始：
+下一轮最小交付包已完成：
 
-1. Provider diagnostics 第二版：显式触发真实连接/模型列表/限流探测，不作为默认只读诊断。
-2. Council Run Summary 第二版：关键观点来源引用、usage 缺失标注、all failed/chairman fallback 专门文案。
-3. 会话管理剩余小项：tag/favorite/archive 搜索分面、批量整理撤销提示或最近操作记录。
-4. 输入工作流剩余小项：待上传文件队列持久化和 `/` 命令菜单。
+1. Provider diagnostics 第二版：已提交 `7f2a99b`，通过后端和前端目标测试以及完整回归矩阵。
+2. Council Run Summary 第二版：已提交 `8669ab4`，通过组件测试和完整回归矩阵。
+3. 会话管理剩余小项：已提交 `3885dde`，覆盖 tag/favorite/archive 搜索整理路径、批量整理 Undo 和 saved view search flags。
+4. 输入工作流剩余小项：已提交 `8669ab4`，覆盖待上传文件队列持久化、恢复文件防误发和 `/` 命令菜单。
 
-P0 可靠性批次已收口；P1 可解释性、Provider 诊断第一版、会话管理第一版、输入工作流第一版、长会话性能和富内容效率第一版已完成。下一轮建议进入 Provider diagnostics 第二版和 Council Run Summary 第二版。
+P0 可靠性批次已收口；P1 可解释性、Provider 诊断、会话管理、输入工作流、长会话性能和富内容效率已全部完成当前计划内优化。下一轮建议进入 `P2` 工程结构整理：拆分 `App.jsx` / `storage.py` / `RichMarkdown.jsx` 的高职责边界，并保留本轮回归矩阵作为拆分保护。
