@@ -5,19 +5,29 @@ import './Sidebar.css';
 
 const SIDEBAR_STATE_STORAGE_KEY = 'llm-council:sidebar-state:v2';
 const TITLE_STATUS_DISMISS_MS = 4000;
+const DEFAULT_LIST_FACETS = {
+  hasFiles: false,
+  failedOnly: false,
+  hasMemory: false,
+  pinnedOnly: false,
+};
+
+const DEFAULT_SEARCH_FLAGS = {
+  hasFiles: false,
+  failedOnly: false,
+  pinnedOnly: false,
+  contextExcludedOnly: false,
+};
+
 const DEFAULT_SIDEBAR_STATE = {
   viewMode: 'active',
   favoriteOnly: false,
   tagFilter: '',
+  listFacets: DEFAULT_LIST_FACETS,
   historySearchQuery: '',
   historySearchSource: 'all',
   historySearchMode: 'all',
-  searchFlags: {
-    hasFiles: false,
-    failedOnly: false,
-    pinnedOnly: false,
-    contextExcludedOnly: false,
-  },
+  searchFlags: DEFAULT_SEARCH_FLAGS,
 };
 
 const DEFAULT_TAG_COLORS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#be123c', '#4f46e5'];
@@ -34,8 +44,12 @@ const readSidebarState = () => {
     return {
       ...DEFAULT_SIDEBAR_STATE,
       ...parsed,
+      listFacets: {
+        ...DEFAULT_LIST_FACETS,
+        ...(parsed.listFacets || {}),
+      },
       searchFlags: {
-        ...DEFAULT_SIDEBAR_STATE.searchFlags,
+        ...DEFAULT_SEARCH_FLAGS,
         ...(parsed.searchFlags || {}),
       },
     };
@@ -149,6 +163,13 @@ const formatSearchDate = (value) => {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
+const conversationFacetBadges = (conversation) => [
+  conversation.pinned || conversation.pinned_message_count > 0 ? 'Pinned' : '',
+  conversation.has_files ? 'Files' : '',
+  conversation.has_failed_run ? 'Failed' : '',
+  conversation.has_memory ? 'Memory' : '',
+].filter(Boolean);
+
 const searchBadgesFor = (result) => [
   result.conversation_pinned ? 'Pinned' : '',
   result.favorite ? 'Favorite' : '',
@@ -221,6 +242,7 @@ export default function Sidebar({
   const [viewMode, setViewMode] = useState(initialSidebarState.viewMode === 'archived' ? 'archived' : 'active');
   const [favoriteOnly, setFavoriteOnly] = useState(Boolean(initialSidebarState.favoriteOnly));
   const [tagFilter, setTagFilter] = useState(initialSidebarState.tagFilter || '');
+  const [listFacets, setListFacets] = useState(initialSidebarState.listFacets || DEFAULT_LIST_FACETS);
   const [historySearchQuery, setHistorySearchQuery] = useState(initialSidebarState.historySearchQuery || '');
   const [historySearchSource, setHistorySearchSource] = useState(initialSidebarState.historySearchSource || 'all');
   const [historySearchMode, setHistorySearchMode] = useState(initialSidebarState.historySearchMode || 'all');
@@ -257,11 +279,12 @@ export default function Sidebar({
     viewMode,
     favoriteOnly,
     tagFilter,
+    listFacets,
     historySearchQuery,
     historySearchSource,
     historySearchMode,
     searchFlags,
-  }), [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, searchFlags, tagFilter, viewMode]);
+  }), [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, listFacets, searchFlags, tagFilter, viewMode]);
 
   const visibleConversations = useMemo(() => {
     return conversations.filter((conversation) => {
@@ -269,9 +292,13 @@ export default function Sidebar({
       if (viewMode === 'active' && conversation.archived) return false;
       if (favoriteOnly && !conversation.favorite) return false;
       if (tagFilter && !(conversation.tags || []).includes(tagFilter)) return false;
+      if (listFacets.hasFiles && !conversation.has_files) return false;
+      if (listFacets.failedOnly && !conversation.has_failed_run) return false;
+      if (listFacets.hasMemory && !conversation.has_memory) return false;
+      if (listFacets.pinnedOnly && !(conversation.pinned || conversation.pinned_message_count > 0)) return false;
       return true;
     });
-  }, [conversations, favoriteOnly, tagFilter, viewMode]);
+  }, [conversations, favoriteOnly, listFacets, tagFilter, viewMode]);
 
   const conversationGroups = useMemo(
     () => groupConversations(visibleConversations, { archivedView: viewMode === 'archived' }),
@@ -311,6 +338,22 @@ export default function Sidebar({
     searchFlags.pinnedOnly,
     searchFlags.contextExcludedOnly,
   ].filter(Boolean).length;
+  const activeConversationFacetCount = [
+    listFacets.hasFiles,
+    listFacets.failedOnly,
+    listFacets.hasMemory,
+    listFacets.pinnedOnly,
+  ].filter(Boolean).length;
+
+  const expandableSearchGroupIds = useMemo(
+    () => groupedSearchResults
+      .filter((group) => group.results.length > 3)
+      .map((group) => group.conversationId),
+    [groupedSearchResults]
+  );
+  const hasExpandableSearchGroups = expandableSearchGroupIds.length > 0;
+  const allExpandableSearchGroupsExpanded = hasExpandableSearchGroups
+    && expandableSearchGroupIds.every((conversationId) => expandedSearchGroups.has(conversationId));
 
   const activeGroupLabel = useMemo(() => {
     const activeGroup = conversationGroups.find((group) =>
@@ -366,12 +409,13 @@ export default function Sidebar({
       viewMode,
       favoriteOnly,
       tagFilter,
+      listFacets,
       historySearchQuery,
       historySearchSource,
       historySearchMode,
       searchFlags,
     });
-  }, [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, searchFlags, tagFilter, viewMode]);
+  }, [favoriteOnly, historySearchMode, historySearchQuery, historySearchSource, listFacets, searchFlags, tagFilter, viewMode]);
 
   useEffect(() => () => {
     Object.values(titleStatusTimersRef.current).forEach(clearTimeout);
@@ -464,6 +508,17 @@ export default function Sidebar({
     onDeleteConversation(conversationId);
   };
 
+  const toggleListFacet = (facetName) => {
+    setListFacets((current) => ({
+      ...current,
+      [facetName]: !current[facetName],
+    }));
+  };
+
+  const clearListFacets = () => {
+    setListFacets(DEFAULT_LIST_FACETS);
+  };
+
   const toggleSearchFlag = (flagName) => {
     setSearchFlags((current) => ({
       ...current,
@@ -474,7 +529,7 @@ export default function Sidebar({
   const clearSearchFilters = () => {
     setHistorySearchSource('all');
     setHistorySearchMode('all');
-    setSearchFlags(DEFAULT_SIDEBAR_STATE.searchFlags);
+    setSearchFlags(DEFAULT_SEARCH_FLAGS);
   };
 
   const handleApplySavedView = (view) => {
@@ -485,10 +540,14 @@ export default function Sidebar({
     setFavoriteOnly(Boolean(filters.favoriteOnly));
     setTagFilter(filters.tagFilter || '');
     setHistorySearchQuery(filters.historySearchQuery || '');
+    setListFacets({
+      ...DEFAULT_LIST_FACETS,
+      ...(filters.listFacets || {}),
+    });
     setHistorySearchSource(filters.historySearchSource || 'all');
     setHistorySearchMode(filters.historySearchMode || 'all');
     setSearchFlags({
-      ...DEFAULT_SIDEBAR_STATE.searchFlags,
+      ...DEFAULT_SEARCH_FLAGS,
       ...(filters.searchFlags || {}),
     });
   };
@@ -607,6 +666,14 @@ export default function Sidebar({
       }
       return next;
     });
+  };
+
+  const expandAllSearchGroups = () => {
+    setExpandedSearchGroups(new Set(expandableSearchGroupIds));
+  };
+
+  const collapseAllSearchGroups = () => {
+    setExpandedSearchGroups(new Set());
   };
 
   const handleSearchKeyDown = (event) => {
@@ -731,6 +798,15 @@ export default function Sidebar({
             ))}
           </select>
         )}
+        <div className="conversation-facet-bar" aria-label="Conversation facets">
+          <button type="button" className={listFacets.hasFiles ? 'active' : ''} onClick={() => toggleListFacet('hasFiles')}>Files</button>
+          <button type="button" className={listFacets.failedOnly ? 'active' : ''} onClick={() => toggleListFacet('failedOnly')}>Failed</button>
+          <button type="button" className={listFacets.hasMemory ? 'active' : ''} onClick={() => toggleListFacet('hasMemory')}>Memory</button>
+          <button type="button" className={listFacets.pinnedOnly ? 'active' : ''} onClick={() => toggleListFacet('pinnedOnly')}>Pinned</button>
+          {activeConversationFacetCount > 0 && (
+            <button type="button" className="clear" onClick={clearListFacets}>Clear</button>
+          )}
+        </div>
         <div className="saved-view-controls" aria-label="Saved conversation views controls">
           <select
             className="saved-view-select"
@@ -866,6 +942,12 @@ export default function Sidebar({
                 ? 'Searching...'
                 : historySearchError || `${filteredSearchResults.length} result${filteredSearchResults.length === 1 ? '' : 's'} in current filters`}
             </div>
+            {!historySearchLoading && hasExpandableSearchGroups && (
+              <div className="sidebar-search-group-actions" aria-label="Search result group actions">
+                <button type="button" onClick={expandAllSearchGroups} disabled={allExpandableSearchGroupsExpanded}>Expand all</button>
+                <button type="button" onClick={collapseAllSearchGroups} disabled={expandedSearchGroups.size === 0}>Collapse all</button>
+              </div>
+            )}
             {!historySearchLoading && filteredSearchResults.length === 0 && (
               <div className="no-conversations">No matching results</div>
             )}
@@ -1076,6 +1158,11 @@ export default function Sidebar({
                           </div>
                           <div className="conversation-meta-row">
                             <span className="conversation-meta">{formatTurnCount(conv)}</span>
+                            {conversationFacetBadges(conv).length > 0 && (
+                              <div className="conversation-facet-badges" aria-label={`Facets for ${conv.title || 'New Conversation'}`}>
+                                {conversationFacetBadges(conv).map((badge) => <span key={badge}>{badge}</span>)}
+                              </div>
+                            )}
                             <div className="conversation-tags">
                               {(conv.tags || []).map((tag) => (
                                 <span

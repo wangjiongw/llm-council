@@ -89,10 +89,12 @@ class ConversationMetadataAPITest(unittest.TestCase):
         self.client.patch("/api/conversations/conv-1", json={"title": "Pinned", "pinned": True})
         conversation = storage.get_conversation("conv-1")
         conversation["messages"] = [
-            {"role": "user", "content": "First question"},
+            {"role": "user", "content": "First question", "files": [{"name": "notes.txt"}], "pinned": True},
             {"role": "assistant", "stage3": {"response": "First answer"}},
             {"role": "user", "content": "Second question"},
+            {"role": "assistant", "status": "failed", "stage3": {"status": "failed", "error": "provider failed"}},
         ]
+        conversation["context_memory"] = [{"id": "mem-1", "content": "Remember this.", "enabled": True}]
         storage.save_conversation(conversation)
 
         response = self.client.get("/api/conversations")
@@ -105,8 +107,12 @@ class ConversationMetadataAPITest(unittest.TestCase):
         self.assertIn("archived", conversations[0])
         self.assertIn("tags", conversations[0])
         self.assertIn("updated_at", conversations[0])
-        self.assertEqual(conversations[0]["message_count"], 3)
+        self.assertEqual(conversations[0]["message_count"], 4)
         self.assertEqual(conversations[0]["turn_count"], 2)
+        self.assertTrue(conversations[0]["has_files"])
+        self.assertTrue(conversations[0]["has_failed_run"])
+        self.assertTrue(conversations[0]["has_memory"])
+        self.assertEqual(conversations[0]["pinned_message_count"], 1)
 
     def test_rejects_empty_title(self):
         response = self.client.patch("/api/conversations/conv-1", json={"title": "   "})

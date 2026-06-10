@@ -95,10 +95,91 @@ describe('Sidebar search results', () => {
       query: 'context',
     }));
   });
+
+  it('expands and collapses all grouped search results', async () => {
+    const user = userEvent.setup();
+    const secondGroupHits = Array.from({ length: 4 }, (_, index) => ({
+      conversation_id: 'conv-2',
+      conversation_title: 'Other Notes',
+      updated_at: '2026-05-02T00:00:00Z',
+      source: 'message',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      message_index: index,
+      excerpt: `Other grouped context hit ${index + 1}`,
+    }));
+    const onSearchConversationHistory = vi.fn(async () => [
+      {
+        conversation_id: 'conv-1',
+        conversation_title: 'Architecture Notes',
+        updated_at: '2026-06-02T00:00:00Z',
+        source: 'message',
+        role: 'assistant',
+        message_index: 1,
+        excerpt: 'Architecture grouped context hit',
+      },
+      ...secondGroupHits,
+    ]);
+
+    render(
+      <Sidebar
+        {...baseProps}
+        onSearchConversationHistory={onSearchConversationHistory}
+      />
+    );
+
+    await user.type(screen.getByLabelText('Search conversation history'), 'context');
+    await waitFor(() => expect(onSearchConversationHistory).toHaveBeenCalledWith('context'));
+
+    const actions = screen.getByLabelText('Search result group actions');
+    const hasExcerpt = (text) => [...document.querySelectorAll('.sidebar-search-result-excerpt')]
+      .some((node) => node.textContent.includes(text));
+    expect(hasExcerpt('Other grouped context hit 4')).toBe(false);
+
+    await user.click(within(actions).getByRole('button', { name: 'Expand all' }));
+    expect(hasExcerpt('Other grouped context hit 4')).toBe(true);
+
+    await user.click(within(actions).getByRole('button', { name: 'Collapse all' }));
+    expect(hasExcerpt('Other grouped context hit 4')).toBe(false);
+  });
 });
 
 
 describe('Sidebar conversation management controls', () => {
+  it('filters conversation list by file, failure, memory, and pinned facets', async () => {
+    const user = userEvent.setup();
+    render(
+      <Sidebar
+        {...baseProps}
+        conversations={[
+          { ...baseProps.conversations[0], has_files: true, has_failed_run: false, has_memory: false, pinned_message_count: 1 },
+          { ...baseProps.conversations[1], title: 'Plain Notes', has_files: false, has_failed_run: false, has_memory: false },
+          { id: 'conv-3', title: 'Broken Memory Run', created_at: '2026-06-03T00:00:00Z', updated_at: '2026-06-03T00:00:00Z', message_count: 2, turn_count: 1, tags: [], pinned: false, favorite: false, has_files: false, has_failed_run: true, has_memory: true },
+        ]}
+      />
+    );
+
+    const facets = screen.getByLabelText('Conversation facets');
+    expect(screen.getByText('Architecture Notes')).toBeInTheDocument();
+    expect(screen.getByText('Broken Memory Run')).toBeInTheDocument();
+
+    await user.click(within(facets).getByRole('button', { name: 'Failed' }));
+    expect(screen.getByText('Broken Memory Run')).toBeInTheDocument();
+    expect(screen.queryByText('Architecture Notes')).not.toBeInTheDocument();
+
+    await user.click(within(facets).getByRole('button', { name: 'Memory' }));
+    expect(screen.getByText('Broken Memory Run')).toBeInTheDocument();
+
+    await user.click(within(facets).getByRole('button', { name: 'Clear' }));
+    await user.click(within(facets).getByRole('button', { name: 'Files' }));
+    expect(screen.getByText('Architecture Notes')).toBeInTheDocument();
+    expect(screen.queryByText('Broken Memory Run')).not.toBeInTheDocument();
+
+    await user.click(within(facets).getByRole('button', { name: 'Clear' }));
+    await user.click(within(facets).getByRole('button', { name: 'Pinned' }));
+    expect(screen.getByText('Architecture Notes')).toBeInTheDocument();
+    expect(screen.queryByText('Plain Notes')).not.toBeInTheDocument();
+  });
+
   it('batch-updates selected conversations', async () => {
     const onBatchUpdateConversations = vi.fn(async () => ({ conversations: [] }));
     const user = userEvent.setup();
@@ -157,12 +238,14 @@ describe('Sidebar conversation management controls', () => {
       />
     );
 
+    await user.click(within(screen.getByLabelText('Conversation facets')).getByRole('button', { name: 'Memory' }));
     await user.type(screen.getByLabelText('Saved view name'), 'Context only');
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(onSaveView).toHaveBeenCalledWith('Context only', expect.objectContaining({
       viewMode: 'active',
       tagFilter: '',
+      listFacets: expect.objectContaining({ hasMemory: true }),
     }));
 
     fireEvent.change(screen.getByLabelText('Color for context'), { target: { value: '#123abc' } });

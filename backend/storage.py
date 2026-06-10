@@ -311,9 +311,22 @@ def _conversation_turn_count(messages: Any) -> int:
     return (len(messages) + 1) // 2
 
 
+def _message_has_files(message: Any) -> bool:
+    return isinstance(message, dict) and bool(message.get("files"))
+
+
+def _message_has_failed_status(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+    status = str(message.get("status") or "").lower()
+    stage3_status = str((message.get("stage3") or {}).get("status") or "").lower() if isinstance(message.get("stage3"), dict) else ""
+    return status in {"failed", "interrupted"} or stage3_status in {"failed", "interrupted"}
+
+
 def _conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
     normalized = _ensure_conversation_metadata(dict(conversation))
     messages = normalized.get("messages") or []
+    context_memory = _normalize_context_memory(normalized.get("context_memory"))
     return {
         "id": normalized["id"],
         "created_at": normalized["created_at"],
@@ -328,6 +341,10 @@ def _conversation_metadata(conversation: Dict[str, Any]) -> Dict[str, Any]:
         "archived": normalized["archived"],
         "pinned": normalized["pinned"],
         "tags": normalized["tags"],
+        "has_files": any(_message_has_files(message) for message in messages),
+        "has_failed_run": any(_message_has_failed_status(message) for message in messages),
+        "has_memory": any(entry.get("enabled") and entry.get("content") for entry in context_memory),
+        "pinned_message_count": sum(1 for message in messages if isinstance(message, dict) and message.get("pinned")),
     }
 
 

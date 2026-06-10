@@ -375,6 +375,39 @@ body.sidebar-resizing {
   color: var(--primary);
 }
 
+.conversation-facet-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.conversation-facet-bar button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.conversation-facet-bar button:hover,
+.conversation-facet-bar button.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.conversation-facet-bar button.clear {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-subtle);
+}
+
 .conversation-tag-filter {
   width: 100%;
   margin-top: 8px;
@@ -391,6 +424,25 @@ body.sidebar-resizing {
   justify-content: space-between;
   gap: 8px;
   margin-top: 2px;
+}
+
+.conversation-facet-badges {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.conversation-facet-badges span {
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--surface-bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .conversation-actions {
@@ -564,6 +616,34 @@ body.sidebar-resizing {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.sidebar-search-group-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-search-group-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sidebar-search-group-actions button:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.sidebar-search-group-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 

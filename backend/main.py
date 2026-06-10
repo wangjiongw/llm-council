@@ -232,6 +232,10 @@ class ConversationMetadata(BaseModel):
     archived: bool = False
     pinned: bool = False
     tags: List[str] = Field(default_factory=list)
+    has_files: bool = False
+    has_failed_run: bool = False
+    has_memory: bool = False
+    pinned_message_count: int = 0
 
 
 class Conversation(BaseModel):
