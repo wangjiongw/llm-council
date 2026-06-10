@@ -10,6 +10,7 @@ import json
 import asyncio
 import copy
 from pathlib import Path
+from urllib.parse import quote
 
 from . import storage
 from .council import run_full_council_with_history, generate_initial_title, generate_conversation_title_from_context, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
@@ -18,6 +19,19 @@ from .openrouter import query_model
 from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
 app = FastAPI(title="LLM Council API")
+
+
+def _attachment_content_disposition(filename: str) -> str:
+    clean_filename = str(filename or "conversation.md").replace("\r", "").replace("\n", "")
+    suffix = Path(clean_filename).suffix if Path(clean_filename).suffix in {".md", ".json"} else ""
+    ascii_filename = "".join(
+        ch if ch.isascii() and 32 <= ord(ch) < 127 and ch not in {'\\', '"', ';'} else "-"
+        for ch in clean_filename
+    ).strip("-. ")
+    if not ascii_filename or ascii_filename == suffix.lstrip("."):
+        ascii_filename = f"conversation{suffix or '.md'}"
+    encoded_filename = quote(clean_filename, safe="")
+    return f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
 
 
 def _maybe_update_generated_title(conversation_id: str, title: str) -> Dict[str, Any]:
@@ -1158,7 +1172,7 @@ async def export_conversation(conversation_id: str, format: Literal["markdown", 
     return Response(
         content=exported,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _attachment_content_disposition(filename)},
     )
 
 

@@ -177,14 +177,27 @@ class ConversationMetadataAPITest(unittest.TestCase):
         conversation["messages"] = [
             {"role": "user", "content": "Design saved views for conversation management"},
             {"role": "assistant", "stage3": {"response": "Use filters and persisted view metadata."}},
+            {"role": "user", "content": "What if a run is interrupted?"},
+            {"role": "assistant", "status": "interrupted", "stage1": [], "stage2": [], "stage3": None, "error": "Client disconnected"},
         ]
         storage.save_conversation(conversation)
 
         export_response = self.client.get("/api/conversations/conv-1/export?format=markdown")
         self.assertEqual(export_response.status_code, 200)
         self.assertIn("# Initial Notes", export_response.text)
+        self.assertIn("## Conversation summary", export_response.text)
+        self.assertIn("## Turn 1", export_response.text)
         self.assertIn("Design saved views", export_response.text)
         self.assertIn("Use filters", export_response.text)
+        self.assertIn("Status: interrupted", export_response.text)
+        self.assertIn("No final response was saved", export_response.text)
+
+        conversation["title"] = "中文标题"
+        storage.save_conversation(conversation)
+        unicode_export_response = self.client.get("/api/conversations/conv-1/export?format=markdown")
+        self.assertEqual(unicode_export_response.status_code, 200)
+        self.assertIn("# 中文标题", unicode_export_response.text)
+        self.assertIn("filename*=UTF-8''%E4%B8%AD%E6%96%87%E6%A0%87%E9%A2%98.md", unicode_export_response.headers["content-disposition"])
 
         with patch("backend.main.generate_conversation_title_from_context", new=AsyncMock(return_value="Conversation Views Design")) as mock_title:
             title_response = self.client.post("/api/conversations/conv-1/title-suggestions")

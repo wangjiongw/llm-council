@@ -25,6 +25,20 @@ function normalizeAbortError(error) {
   throw error;
 }
 
+function filenameFromContentDisposition(disposition, fallback) {
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return filenameMatch?.[1] || fallback;
+}
+
 export function parseSSEBlock(block) {
   const dataLines = [];
 
@@ -485,8 +499,8 @@ export const api = {
 
     const blob = await response.blob();
     const disposition = response.headers.get('Content-Disposition') || '';
-    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
-    const filename = filenameMatch?.[1] || `conversation-${conversationId}.${format === 'json' ? 'json' : 'md'}`;
+    const fallbackFilename = `conversation-${conversationId}.${format === 'json' ? 'json' : 'md'}`;
+    const filename = filenameFromContentDisposition(disposition, fallbackFilename);
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;

@@ -1393,14 +1393,120 @@ def batch_update_conversations(conversation_ids: List[str], updates: Dict[str, A
 
 
 def _message_export_text(message: Dict[str, Any]) -> str:
+    if not isinstance(message, dict):
+        return ""
     content = message.get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(str(item.get("text") or "") for item in content if isinstance(item, dict) and item.get("type") == "text").strip()
-    if message.get("stage3", {}).get("response"):
-        return str(message["stage3"]["response"])
+        return "\n".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ).strip()
+    stage3 = message.get("stage3") or {}
+    if isinstance(stage3, dict) and stage3.get("response"):
+        return str(stage3["response"])
     return ""
+
+
+def _export_heading_text(value: Any, fallback: str = "Untitled") -> str:
+    text = " ".join(str(value or fallback).split()) or fallback
+    return text.replace("#", "﹟")
+
+
+def _export_metadata_value(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) if value else "-"
+    return str(value)
+
+
+def _assistant_export_text(message: Dict[str, Any]) -> str:
+    stage3 = message.get("stage3") or {}
+    if isinstance(stage3, dict) and stage3.get("response"):
+        return str(stage3["response"])
+    return _message_export_text(message)
+
+
+def _export_stage_summary(label: str, results: Any, content_key: str) -> str | None:
+    if not isinstance(results, list) or not results:
+        return None
+    total = len(results)
+    success = sum(
+        1 for result in results
+        if isinstance(result, dict) and result.get("status") != "failed" and result.get(content_key)
+    )
+    failed = max(0, total - success)
+    return f"{label}: {success}/{total} completed" + (f", {failed} failed" if failed else "")
+
+
+def _export_assistant_meta(message: Dict[str, Any]) -> List[str]:
+    metadata = message.get("metadata") or {}
+    stage3 = message.get("stage3") or {}
+    items = []
+    mode = metadata.get("mode")
+    if not mode and isinstance(stage3, dict):
+        mode = (stage3.get("metadata") or {}).get("mode")
+    status = message.get("status") or (stage3.get("status") if isinstance(stage3, dict) else None)
+    model = stage3.get("model") if isinstance(stage3, dict) else None
+    if mode:
+        items.append(f"Mode: {mode}")
+    if status:
+        items.append(f"Status: {status}")
+    if model:
+        items.append(f"Model: {model}")
+    if message.get("updated_at"):
+        items.append(f"Updated: {message['updated_at']}")
+    return items
+
+
+def _append_export_files(lines: List[str], message: Dict[str, Any]) -> None:
+    files = message.get("files") if isinstance(message, dict) else None
+    if not files:
+        return
+    lines.append("")
+    lines.append("Files:")
+    for file_info in files:
+        if isinstance(file_info, dict):
+            name = file_info.get("name") or file_info.get("filename") or "file"
+            size = file_info.get("size")
+            suffix = f" ({size} bytes)" if size else ""
+            lines.append(f"- {name}{suffix}")
+        else:
+            lines.append(f"- {file_info}")
+
+
+def _append_assistant_export(lines: List[str], message: Dict[str, Any]) -> None:
+    lines.append(f"### Assistant")
+    lines.append("")
+    meta = _export_assistant_meta(message)
+    if meta:
+        lines.extend(f"- {item}" for item in meta)
+        lines.append("")
+
+    summaries = [
+        _export_stage_summary("Stage 1", message.get("stage1"), "response"),
+        _export_stage_summary("Stage 2", message.get("stage2"), "ranking"),
+    ]
+    summaries = [item for item in summaries if item]
+    if summaries:
+        lines.append("Run summary:")
+        lines.extend(f"- {item}" for item in summaries)
+        lines.append("")
+
+    text = _assistant_export_text(message)
+    if text:
+        lines.append(text)
+    else:
+        status = message.get("status") or "incomplete"
+        error = message.get("error")
+        lines.append(f"[No final response was saved for this assistant message. Status: {status}]")
+        if error:
+            lines.append("")
+            lines.append(f"Error: {error}")
+    _append_export_files(lines, message)
 
 
 def export_conversation(conversation_id: str, export_format: str = "markdown") -> tuple[str, str, str]:
@@ -1413,30 +1519,63 @@ def export_conversation(conversation_id: str, export_format: str = "markdown") -
     if export_format == "json":
         return json.dumps(conversation, indent=2, ensure_ascii=False), f"{safe_title}.json", "application/json; charset=utf-8"
 
-    lines = [f"# {title}", ""]
     metadata = _conversation_metadata(conversation)
-    lines.extend([
-        f"- ID: {metadata['id']}",
-        f"- Created: {metadata['created_at']}",
-        f"- Updated: {metadata['updated_at']}",
-        f"- Messages: {metadata['message_count']}",
-        f"- Tags: {', '.join(metadata['tags']) if metadata['tags'] else 'none'}",
+    messages = conversation.get("messages") if isinstance(conversation.get("messages"), list) else []
+    lines = [
+        f"# {_export_heading_text(title, 'Conversation')}",
         "",
-    ])
-    for index, message in enumerate(conversation.get("messages") or []):
-        role = message.get("role") or "message"
-        lines.append(f"## {index + 1}. {role.title()}")
-        lines.append("")
-        text = _message_export_text(message)
-        lines.append(text or "[No text content]")
-        if message.get("files"):
-            lines.append("")
-            lines.append("Files:")
-            for file_info in message.get("files") or []:
-                lines.append(f"- {file_info.get('name') or file_info.get('filename') or 'file'}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n", f"{safe_title}.md", "text/markdown; charset=utf-8"
+        "## Conversation summary",
+        "",
+        f"- ID: {_export_metadata_value(metadata['id'])}",
+        f"- Created: {_export_metadata_value(metadata['created_at'])}",
+        f"- Updated: {_export_metadata_value(metadata['updated_at'])}",
+        f"- Turns: {_export_metadata_value(metadata['turn_count'])}",
+        f"- Messages: {_export_metadata_value(metadata['message_count'])}",
+        f"- Tags: {_export_metadata_value(metadata['tags'])}",
+        "",
+        "## Transcript",
+        "",
+    ]
 
+    if not messages:
+        lines.append("[No messages in this conversation]")
+        return "\n".join(lines).rstrip() + "\n", f"{safe_title}.md", "text/markdown; charset=utf-8"
+
+    turn_number = 0
+    orphan_assistant_count = 0
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            lines.append(f"### Message {index + 1}")
+            lines.append("")
+            lines.append("[This message could not be exported because its stored shape is invalid.]")
+            lines.append("")
+            continue
+
+        role = message.get("role") or "message"
+        if role == "user":
+            turn_number += 1
+            lines.append(f"## Turn {turn_number}")
+            lines.append("")
+            lines.append("### User")
+            lines.append("")
+            lines.append(_message_export_text(message) or "[No text content]")
+            _append_export_files(lines, message)
+            lines.append("")
+        elif role == "assistant":
+            if turn_number == 0:
+                orphan_assistant_count += 1
+                lines.append(f"## Assistant message {orphan_assistant_count}")
+                lines.append("")
+            _append_assistant_export(lines, message)
+            lines.append("")
+        else:
+            lines.append(f"## Message {index + 1}: {_export_heading_text(role, 'message').title()}")
+            lines.append("")
+            lines.append(_message_export_text(message) or "[No text content]")
+            _append_export_files(lines, message)
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n", f"{safe_title}.md", "text/markdown; charset=utf-8"
 
 def _compact_title_candidate(value: str, *, max_words: int = 8, max_chars: int = 42) -> str:
     clean = " ".join(str(value or "").split())
