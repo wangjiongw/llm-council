@@ -95,14 +95,14 @@ async function controlConversation(page, conversation, initialMessages = []) {
   };
 }
 
-async function createControlledConversation(request, page, title) {
+async function createControlledConversation(request, page, title, initialMessages = []) {
   const createResponse = await request.post('/api/conversations', { data: {} });
   expect(createResponse.ok()).toBeTruthy();
   const created = await createResponse.json();
   const updateResponse = await request.patch(`/api/conversations/${created.id}`, { data: { title } });
   expect(updateResponse.ok()).toBeTruthy();
   const conversation = await updateResponse.json();
-  return controlConversation(page, conversation);
+  return controlConversation(page, conversation, initialMessages);
 }
 
 async function conversationDataDir(request) {
@@ -130,7 +130,15 @@ async function createPersistedConversationFixture(request, title, messages) {
     pinned: false,
     tags: ['e2e'],
     messages,
-    turns: messages.length >= 2 ? [{ id: `${id}-turn-1`, user_message_index: 0, assistant_message_index: 1, status: 'complete' }] : [],
+    turns: messages.reduce((turns, message, index) => {
+      if (message.role !== 'user') return turns;
+      const assistantIndex = messages.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate.role === 'assistant');
+      if (assistantIndex === -1) return turns;
+      return [
+        ...turns,
+        { id: `${id}-turn-${turns.length + 1}`, user_message_index: index, assistant_message_index: assistantIndex, status: 'complete' },
+      ];
+    }, []),
     context_summary: { content: '', status: 'empty' },
     context_memory: [],
   };
@@ -164,6 +172,38 @@ async function deleteConversationIfPresent(request, conversationId) {
 
 function sse(events) {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+}
+
+function longConversationMessages(turns = 110) {
+  return Array.from({ length: turns }).flatMap((_, turnIndex) => {
+    const turnNumber = turnIndex + 1;
+    const isFarTarget = turnNumber === turns - 2;
+    const assistantResponse = isFarTarget
+      ? String.raw`Far target answer with formula:
+
+$$
+E = mc^2
+$$
+
+And diagram:
+
+\`\`\`mermaid
+graph TD; A-->B;
+\`\`\``.replace(/\\`/g, '`')
+      : `Long conversation answer ${turnNumber}`;
+
+    return [
+      { role: 'user', content: isFarTarget ? 'mobile far target needle in a 100 turn conversation' : `Long conversation question ${turnNumber}` },
+      {
+        role: 'assistant',
+        status: 'complete',
+        stage1: [],
+        stage2: [],
+        stage3: { response: assistantResponse, status: 'success', model: 'mock/model' },
+        metadata: { mode: 'quick' },
+      },
+    ];
+  });
 }
 
 async function openControlledConversation(page, title) {
@@ -396,6 +436,50 @@ test.describe('deployed chatbox smoke', () => {
     } finally {
       await deleteConversationIfPresent(request, branch.id);
       await deleteConversationIfPresent(request, parent.conversation.id);
+    }
+  });
+
+  test('keeps a 100 turn mobile conversation searchable and autoscrolls streamed follow-up', async ({ page, request }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const title = 'E2E Long Mobile Conversation';
+    const controlled = await createControlledConversation(request, page, title, longConversationMessages(110));
+    let postCount = 0;
+
+    await page.route(`**/api/conversations/${controlled.conversation.id}/quick/stream`, async (route) => {
+      postCount += 1;
+      const body = JSON.parse(route.request().postData() || '{}');
+      controlled.appendTurn(body.content, 'quick');
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: sse([
+          { type: 'quick_start' },
+          { type: 'quick_complete', data: { response: `quick response for ${body.content}`, status: 'success', model: 'mock/model' }, metadata: { mode: 'quick' } },
+          { type: 'complete' },
+        ]),
+      });
+    });
+
+    try {
+      await openControlledConversation(page, title);
+      await expect(page.locator('.messages-history.virtualized')).toBeVisible();
+      expect(await page.locator('.message-virtual-spacer').count()).toBeGreaterThan(0);
+
+      await page.getByLabel('Search in this conversation').fill('mobile far target needle');
+      await expect(page.locator('.conversation-search-status')).toHaveText('1 / 1 · 1 hits');
+      await expect(page.locator('.user-message-body').filter({ hasText: 'mobile far target needle in a 100 turn conversation' })).toBeVisible();
+      await page.getByLabel('Search in this conversation').fill('');
+      await page.getByRole('button', { name: 'Bottom' }).click();
+      const input = page.locator('.message-input');
+      await input.fill('mobile streaming follow up');
+      await page.getByLabel('Quick query').click();
+
+      await expect(input).toHaveValue('');
+      await expect(page.getByText('mobile streaming follow up', { exact: true })).toBeVisible();
+      await expect(page.getByText('quick response for mobile streaming follow up')).toBeVisible();
+      expect(postCount).toBe(1);
+    } finally {
+      await deleteConversationIfPresent(request, controlled.conversation.id);
     }
   });
 

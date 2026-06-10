@@ -115,6 +115,30 @@ describe('ChatInterface conversation efficiency controls', () => {
     });
   });
 
+  it('scrolls virtualized long conversations to the estimated bottom from turn navigation', async () => {
+    const user = userEvent.setup();
+    const messages = Array.from({ length: 100 }, (_, index) => (
+      index % 2 === 0
+        ? { role: 'user', content: 'Question ' + index }
+        : assistantMessage('Answer ' + index)
+    ));
+    const conversation = { id: 'conv-virtual-bottom', messages };
+
+    renderChat(conversation);
+    HTMLElement.prototype.scrollTo.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Bottom' }));
+
+    await waitFor(() => {
+      expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith(expect.objectContaining({
+        behavior: 'smooth',
+        top: expect.any(Number),
+      }));
+    });
+    const bottomCall = HTMLElement.prototype.scrollTo.mock.calls.find(([arg]) => arg?.behavior === 'smooth' && arg?.top > 0);
+    expect(bottomCall).toBeTruthy();
+  });
+
   it('previews historical assistant answers and keeps the latest answer expanded', () => {
     const conversation = {
       id: 'conv-collapse',

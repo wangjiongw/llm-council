@@ -971,6 +971,12 @@ export default function ChatInterface({
   const draftStorageKey = conversation?.id ? `${DRAFT_STORAGE_PREFIX}${conversation.id}` : null;
   const conversationMessages = useMemo(() => conversation?.messages || [], [conversation?.messages]);
   const shouldVirtualizeMessages = conversationMessages.length > VIRTUAL_MESSAGE_THRESHOLD;
+  const scrollStateRef = useRef({
+    conversationMessages: [],
+    measuredMessageHeights: new Map(),
+    scrollHeight: 0,
+    shouldVirtualizeMessages: false,
+  });
 
   const persistDraft = useCallback((content, mode = draftMode) => {
     if (!draftStorageKey) return false;
@@ -988,13 +994,38 @@ export default function ChatInterface({
     }
   }, [draftMode, draftStorageKey, persistDraft]);
 
-  const scrollToBottom = () => {
+  useEffect(() => {
+    scrollStateRef.current = {
+      conversationMessages,
+      measuredMessageHeights,
+      scrollHeight: scrollMetrics.height,
+      shouldVirtualizeMessages,
+    };
+  }, [conversationMessages, measuredMessageHeights, scrollMetrics.height, shouldVirtualizeMessages]);
+
+  const scrollToBottom = useCallback(() => {
+    const latestScrollState = scrollStateRef.current;
+    if (latestScrollState.shouldVirtualizeMessages && messagesContainerRef.current) {
+      const containerHeight = messagesContainerRef.current.clientHeight || latestScrollState.scrollHeight || 720;
+      const totalHeight = latestScrollState.conversationMessages.reduce(
+        (total, _, index) => total + (latestScrollState.measuredMessageHeights.get(index) || ESTIMATED_MESSAGE_HEIGHT),
+        0
+      );
+      const top = Math.max(0, totalHeight - containerHeight);
+      setScrollMetrics((current) => (
+        current.top === top && current.height === containerHeight ? current : { top, height: containerHeight }
+      ));
+      messagesContainerRef.current.scrollTo({ top, behavior: 'smooth' });
+      window.setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }));
+      return;
+    }
+
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [conversation]);
+  }, [conversation, scrollToBottom]);
 
   useEffect(() => {
     setContextPreview(null);
@@ -1341,7 +1372,7 @@ export default function ChatInterface({
   const scrollMessagesToBottom = useCallback(() => {
     scrollToBottom();
     setCurrentTurnIndex(Math.max(0, turnEntries.length - 1));
-  }, [turnEntries.length]);
+  }, [scrollToBottom, turnEntries.length]);
 
   useEffect(() => {
     if (messageSearchQuery.trim() && activeSearchResult) {
