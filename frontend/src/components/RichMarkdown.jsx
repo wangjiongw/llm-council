@@ -610,21 +610,99 @@ function MathBlock({ expression, mode }) {
   );
 }
 
+const LATEX_COMMAND_PATTERN = /\\[a-zA-Z]+/;
+const MATH_STRUCTURE_PATTERN = /(?:[_^{}=<>]|\\[,;:!]|[A-Za-z0-9)]\s*_\s*[A-Za-z0-9{\\])/;
+
+function looksLikeMathExpression(value, { inline = false } = {}) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (inline && text.length > 160) return false;
+  if (!inline && text.length > 12000) return false;
+  if (/^\[[ xX]\]/.test(text)) return false;
+  if (LATEX_COMMAND_PATTERN.test(text)) return true;
+  return MATH_STRUCTURE_PATTERN.test(text);
+}
+
+function isEscaped(text, index) {
+  let slashes = 0;
+  for (let pos = index - 1; pos >= 0 && text[pos] === '\\'; pos -= 1) {
+    slashes += 1;
+  }
+  return slashes % 2 === 1;
+}
+
+function findUnescapedDollar(text, start) {
+  for (let pos = start; pos < text.length; pos += 1) {
+    if (text[pos] === '\n') return -1;
+    if (text[pos] === '$' && !isEscaped(text, pos)) return pos;
+  }
+  return -1;
+}
+
+function findBalancedParenEnd(text, start) {
+  let depth = 0;
+  for (let pos = start; pos < text.length; pos += 1) {
+    const char = text[pos];
+    if (char === '\n') return -1;
+    if (isEscaped(text, pos)) continue;
+    if (char === '(') depth += 1;
+    if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return pos;
+    }
+  }
+  return -1;
+}
+
+function findNextInlineMath(text, startAt) {
+  for (let pos = startAt; pos < text.length; pos += 1) {
+    if (text[pos] === '$' && !isEscaped(text, pos)) {
+      const end = findUnescapedDollar(text, pos + 1);
+      if (end > pos + 1) {
+        const expression = text.slice(pos + 1, end).trim();
+        if (expression) {
+          return { start: pos, end: end + 1, expression };
+        }
+      }
+    }
+
+    if (text[pos] === '\\' && text[pos + 1] === '(') {
+      const end = text.indexOf('\\)', pos + 2);
+      if (end > pos + 2) {
+        const expression = text.slice(pos + 2, end).trim();
+        if (expression && !expression.includes('\n')) {
+          return { start: pos, end: end + 2, expression };
+        }
+      }
+    }
+
+    if (text[pos] === '(' && !isEscaped(text, pos)) {
+      const end = findBalancedParenEnd(text, pos);
+      if (end > pos + 1) {
+        const expression = text.slice(pos + 1, end).trim();
+        if (LATEX_COMMAND_PATTERN.test(expression) && looksLikeMathExpression(expression, { inline: true })) {
+          return { start: pos, end: end + 1, expression };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function renderInlineMathText(text, mode, keyPrefix) {
   const parts = [];
   let cursor = 0;
   let index = 0;
-  const pattern = /(^|[^\\])\$([^$\n]+?)(?<!\\)\$/g;
-  let match;
+  let match = findNextInlineMath(text, cursor);
 
-  while ((match = pattern.exec(text)) !== null) {
-    const dollarStart = match.index + match[1].length;
-    if (dollarStart > cursor) {
-      parts.push(text.slice(cursor, dollarStart));
+  while (match) {
+    if (match.start > cursor) {
+      parts.push(text.slice(cursor, match.start));
     }
-    parts.push(<MathInline expression={match[2].trim()} mode={mode} key={`${keyPrefix}-math-${index}`} />);
-    cursor = dollarStart + match[2].length + 2;
+    parts.push(<MathInline expression={match.expression} mode={mode} key={`${keyPrefix}-math-${index}`} />);
+    cursor = match.end;
     index += 1;
+    match = findNextInlineMath(text, cursor);
   }
 
   if (cursor < text.length) {
@@ -803,12 +881,59 @@ function compactContent(content) {
     .replace(/```[\s\S]*?```/g, '[code block]')
     .replace(/!\[[^\]]*\]\([^)]+\)/g, '[image]')
     .replace(/\$\$[\s\S]*?\$\$/g, '[formula]')
+    .replace(/\\\[[\s\S]*?\\\]/g, '[formula]')
+    .replace(/(^|\n{2,})[ \t]*\[([\s\S]+?)\][ \t]*(?=\n{2,}|$)/g, (match, prefix, expression) => (
+      looksLikeMathExpression(expression) ? `${prefix}[formula]` : match
+    ))
     .replace(/\|(.+)\|/g, '[table]')
     .replace(/\s+/g, ' ')
     .trim();
   const compact = text.length > 420 ? `${text.slice(0, 420)}...` : text;
   remember(compactContentCache, cacheKey, compact, { maxEntries: 160, maxChars: 250_000 });
   return compact;
+}
+
+function collectBlockMathMatches(source) {
+  const matches = [];
+  const addPatternMatches = (pattern, getMatch) => {
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      const next = getMatch(match);
+      if (next?.expression && (next.explicit || looksLikeMathExpression(next.expression))) {
+        matches.push(next);
+      }
+    }
+  };
+
+  addPatternMatches(/\$\$([\s\S]+?)\$\$/g, (match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    expression: match[1].trim(),
+    explicit: true,
+  }));
+  addPatternMatches(/\\\[([\s\S]+?)\\\]/g, (match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    expression: match[1].trim(),
+    explicit: true,
+  }));
+  addPatternMatches(/(^|\n{2,})[ \t]*\[([\s\S]+?)\][ \t]*(?=\n{2,}|$)/g, (match) => {
+    const start = match.index + match[1].length;
+    return {
+      start,
+      end: match.index + match[0].length,
+      expression: match[2].trim(),
+    };
+  });
+
+  return matches
+    .sort((a, b) => (a.start - b.start) || (b.end - a.end))
+    .reduce((accepted, match) => {
+      const last = accepted[accepted.length - 1];
+      if (last && match.start < last.end) return accepted;
+      accepted.push(match);
+      return accepted;
+    }, []);
 }
 
 function splitBlockMath(content) {
@@ -819,16 +944,15 @@ function splitBlockMath(content) {
 
   const segments = [];
   let cursor = 0;
-  const pattern = /\$\$([\s\S]+?)\$\$/g;
-  let match;
+  const matches = collectBlockMathMatches(source);
 
-  while ((match = pattern.exec(source)) !== null) {
-    if (match.index > cursor) {
-      segments.push({ type: 'markdown', value: source.slice(cursor, match.index) });
+  matches.forEach((match) => {
+    if (match.start > cursor) {
+      segments.push({ type: 'markdown', value: source.slice(cursor, match.start) });
     }
-    segments.push({ type: 'math', value: match[1].trim() });
-    cursor = match.index + match[0].length;
-  }
+    segments.push({ type: 'math', value: match.expression });
+    cursor = match.end;
+  });
 
   if (cursor < source.length) {
     segments.push({ type: 'markdown', value: source.slice(cursor) });
