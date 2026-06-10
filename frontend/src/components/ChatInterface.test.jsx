@@ -136,6 +136,38 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(screen.getAllByRole('button', { name: /Show full answer/i }).length).toBeGreaterThan(0);
   });
 
+  it('keeps the draft when the active conversation rejects a council send', async () => {
+    const user = userEvent.setup();
+    const onSendMessage = vi.fn(() => false);
+    const conversation = { id: 'conv-pending', messages: [] };
+
+    renderChat(conversation, { onSendMessage });
+    const input = screen.getByPlaceholderText(/Ask/i);
+
+    await user.type(input, 'follow up question');
+    await user.click(screen.getByRole('button', { name: /Send to council/i }));
+
+    expect(onSendMessage).toHaveBeenCalledWith('follow up question', []);
+    expect(input).toHaveValue('follow up question');
+  });
+
+  it('restores an unsent draft back into the input', async () => {
+    const conversation = { id: 'conv-restore', messages: [] };
+    const { rerender } = renderChat(conversation);
+
+    rerender(
+      <ChatInterface
+        {...baseProps}
+        conversation={conversation}
+        draftToRestore={{ id: 'draft-restore', content: 'restore this draft' }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Ask/i)).toHaveValue('restore this draft');
+    });
+  });
+
   it('does not submit when Enter commits IME composition', async () => {
     const onSendMessage = vi.fn();
     const conversation = { id: 'conv-ime', messages: [] };

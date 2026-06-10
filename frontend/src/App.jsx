@@ -117,6 +117,7 @@ function App() {
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
+      setCurrentConversation(newConv);
       setAttachedFiles([]); // Clear file queue for new conversation
       setCurrentContextAudit(null);
       setCurrentContextPolicy(newConv.context_policy || null);
@@ -683,7 +684,18 @@ function App() {
     });
   };
 
-  const handleCouncilStreamEvent = (eventType, event, messageIndex = null) => {
+  const restoreDraftIfNoPersistedTurn = useCallback((draft, loadedConversation) => {
+    if (!draft) return;
+    const persistedMessageCount = loadedConversation?.messages?.length ?? 0;
+    if (persistedMessageCount <= draft.messageCountBefore) {
+      setDraftToRestore({
+        ...draft,
+        restoreId: `${draft.id}-restore-${Date.now()}`,
+      });
+    }
+  }, []);
+
+  const handleCouncilStreamEvent = (eventType, event, messageIndex = null, draft = null) => {
     if (
       eventType.startsWith('stage1_model_') ||
       eventType.startsWith('stage2_model_') ||
@@ -787,7 +799,9 @@ function App() {
           lastMsg.loading.stage2 = false;
           lastMsg.loading.stage3 = false;
         });
-        loadConversationDetails(currentConversationId);
+        loadConversationDetails(currentConversationId).then((loadedConversation) => {
+          restoreDraftIfNoPersistedTurn(draft, loadedConversation);
+        });
         setIsLoading(false);
         setActiveStreamId(null);
         setInFlightDraft(null);
@@ -798,120 +812,131 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (content, files = attachedFiles) => {
-    if (!currentConversationId) return;
+  const handleSendMessage = (content, files = attachedFiles) => {
+    if (!currentConversationId || currentConversation?.id !== currentConversationId) return false;
 
     const hasFiles = files.length > 0;
+    const messageCountBefore = currentConversation?.messages?.length ?? 0;
     setIsLoading(true);
     const streamId = Date.now().toString(); // Unique ID for this stream
-    setActiveStreamId(streamId);
-    setInFlightDraft({
+    const draft = {
       id: streamId,
       content,
       hasFiles,
-    });
+      messageCountBefore,
+    };
+    setActiveStreamId(streamId);
+    setInFlightDraft(draft);
     setDraftToRestore(null);
 
-    try {
-      // Extract file metadata for UI display
-      const fileMetadata = files.map(f => ({
-        id: f.id,
-        name: f.name,
-        type: f.type,
-        size: f.size,
-        category: f.category
-      }));
-
-      // Optimistically add user message to UI (with file metadata)
-      const userMessage = {
-        role: 'user',
-        content,
-        ...(fileMetadata.length > 0 && { files: fileMetadata })
-      };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
-
-      // Send message with streaming (or file upload if files present)
-      if (hasFiles) {
-        // Use file upload endpoint (non-streaming)
-        const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'council');
-
-        // Add assistant response
-        setCurrentConversation((prev) => ({
-          ...prev,
-          messages: [
-            ...prev.messages,
-            {
-              role: 'assistant',
-              stage1: response.stage1_results,
-              stage2: response.stage2_results,
-              stage3: response.stage3_result,
-              metadata: response.metadata,
-            },
-          ],
+    void (async () => {
+      try {
+        // Extract file metadata for UI display
+        const fileMetadata = files.map(f => ({
+          id: f.id,
+          name: f.name,
+          type: f.type,
+          size: f.size,
+          category: f.category
         }));
 
-        // Files are one-shot browser File objects. Sent file metadata stays on
-        // the message; the pending queue is cleared after success.
-        setAttachedFiles([]);
+        // Optimistically add user message to UI (with file metadata)
+        const userMessage = {
+          role: 'user',
+          content,
+          ...(fileMetadata.length > 0 && { files: fileMetadata })
+        };
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: [...prev.messages, userMessage],
+        }));
 
-        // Reload conversations list and persisted turn audit.
-        loadConversations();
-        await loadConversationDetails(currentConversationId);
+        // Send message with streaming (or file upload if files present)
+        if (hasFiles) {
+          // Use file upload endpoint (non-streaming)
+          const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'council');
+
+          // Add assistant response
+          setCurrentConversation((prev) => ({
+            ...prev,
+            messages: [
+              ...prev.messages,
+              {
+                role: 'assistant',
+                stage1: response.stage1_results,
+                stage2: response.stage2_results,
+                stage3: response.stage3_result,
+                metadata: response.metadata,
+              },
+            ],
+          }));
+
+          // Files are one-shot browser File objects. Sent file metadata stays on
+          // the message; the pending queue is cleared after success.
+          setAttachedFiles([]);
+
+          // Reload conversations list and persisted turn audit.
+          loadConversations();
+          await loadConversationDetails(currentConversationId);
+          setIsLoading(false);
+          setActiveStreamId(null);
+          setInFlightDraft(null);
+        } else {
+          // Create a partial assistant message that will be updated progressively
+          const assistantMessage = {
+            role: 'assistant',
+            stage1: null,
+            stage2: null,
+            stage3: null,
+            metadata: null,
+            modelStatus: {
+              stage1: {},
+              stage2: {},
+              stage3: {},
+            },
+            loading: {
+              stage1: false,
+              stage2: false,
+              stage3: false,
+            },
+          };
+
+          // Add the partial assistant message
+          setCurrentConversation((prev) => ({
+            ...prev,
+            messages: [...prev.messages, assistantMessage],
+          }));
+
+          // Use streaming endpoint for text-only messages
+          await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
+            handleCouncilStreamEvent(eventType, event, null, draft);
+          });
+        }
+      } catch (error) {
+        console.error('Failed to send message:', error);
+
+        // Check if it was a user cancellation
+        if (error.message === 'Query stopped by user') {
+          // Already handled in handleStopQuery
+          return;
+        }
+
+        // Remove optimistic messages on error and restore the unsent draft.
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: prev.messages.slice(0, hasFiles ? -1 : -2),
+        }));
+        setDraftToRestore({
+          ...draft,
+          restoreId: `${draft.id}-failed-${Date.now()}`,
+        });
         setIsLoading(false);
         setActiveStreamId(null);
         setInFlightDraft(null);
-      } else {
-        // Create a partial assistant message that will be updated progressively
-        const assistantMessage = {
-          role: 'assistant',
-          stage1: null,
-          stage2: null,
-          stage3: null,
-          metadata: null,
-          modelStatus: {
-            stage1: {},
-            stage2: {},
-            stage3: {},
-          },
-          loading: {
-            stage1: false,
-            stage2: false,
-            stage3: false,
-          },
-        };
-
-        // Add the partial assistant message
-        setCurrentConversation((prev) => ({
-          ...prev,
-          messages: [...prev.messages, assistantMessage],
-        }));
-
-        // Use streaming endpoint for text-only messages
-        await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
-          handleCouncilStreamEvent(eventType, event);
-        });
       }
-    } catch (error) {
-      console.error('Failed to send message:', error);
+    })();
 
-      // Check if it was a user cancellation
-      if (error.message === 'Query stopped by user') {
-        // Already handled in handleStopQuery
-        return;
-      }
-
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, hasFiles ? -1 : -2),
-      }));
-      setIsLoading(false);
-      setActiveStreamId(null);
-      setInFlightDraft(null);
-    }
+    return true;
   };
 
   const handleResumeSavedStages = async (messageIndex) => {
@@ -954,131 +979,123 @@ function App() {
     }
   };
 
-  const handleSendQuickMessage = async (content, files = attachedFiles) => {
-    if (!currentConversationId) return;
+  const handleSendQuickMessage = (content, files = attachedFiles) => {
+    if (!currentConversationId || currentConversation?.id !== currentConversationId) return false;
 
+    const messageCountBefore = currentConversation?.messages?.length ?? 0;
+    const hasFiles = files.length > 0;
     setIsLoading(true);
     const requestId = Date.now().toString();
-    setActiveStreamId(requestId);
-    setInFlightDraft({
+    const draft = {
       id: requestId,
       content,
-      hasFiles: files.length > 0,
-    });
+      hasFiles,
+      messageCountBefore,
+    };
+    setActiveStreamId(requestId);
+    setInFlightDraft(draft);
     setDraftToRestore(null);
 
-    try {
-      // Extract file metadata for UI display
-      const fileMetadata = files.map(f => ({
-        id: f.id,
-        name: f.name,
-        type: f.type,
-        size: f.size,
-        category: f.category
-      }));
-
-      // Optimistically add user message to UI
-      const userMessage = {
-        role: 'user',
-        content,
-        ...(fileMetadata.length > 0 && { files: fileMetadata })
-      };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
-
-      if (files.length > 0) {
-        const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'quick');
-
-        // Add assistant response in quick-compatible stage3 format
-        setCurrentConversation((prev) => ({
-          ...prev,
-          messages: [
-            ...prev.messages,
-            {
-              role: 'assistant',
-              stage1: response.stage1_results,
-              stage2: response.stage2_results,
-              stage3: response.stage3_result,
-              metadata: response.metadata,
-            },
-          ],
+    void (async () => {
+      try {
+        // Extract file metadata for UI display
+        const fileMetadata = files.map(f => ({
+          id: f.id,
+          name: f.name,
+          type: f.type,
+          size: f.size,
+          category: f.category
         }));
 
-        // Files are one-shot browser File objects. Sent file metadata stays on
-        // the message; the pending queue is cleared after success.
-        setAttachedFiles([]);
-      } else {
-        const assistantMessage = {
-          role: 'assistant',
-          status: 'running',
-          stage1: [],
-          stage2: [],
-          stage3: null,
-          metadata: { mode: 'quick' },
-          modelStatus: {
-            stage1: {},
-            stage2: {},
-            stage3: {},
-          },
-          loading: {
-            stage1: false,
-            stage2: false,
-            stage3: true,
-          },
+        // Optimistically add user message to UI
+        const userMessage = {
+          role: 'user',
+          content,
+          ...(fileMetadata.length > 0 && { files: fileMetadata })
         };
-
         setCurrentConversation((prev) => ({
           ...prev,
-          messages: [...prev.messages, assistantMessage],
+          messages: [...prev.messages, userMessage],
         }));
 
-        // No files, use quick streaming endpoint
-        await api.sendQuickMessageStream(currentConversationId, content, (eventType, event) => {
-          handleCouncilStreamEvent(eventType, event);
-        });
-      }
+        if (files.length > 0) {
+          const response = await api.sendMessageWithFiles(currentConversationId, content, files, 'quick');
 
-      // Reload conversations list and persisted turn audit.
-      loadConversations();
-      await loadConversationDetails(currentConversationId);
-    } catch (error) {
-      console.error('Failed to send quick message:', error);
+          // Add assistant response in quick-compatible stage3 format
+          setCurrentConversation((prev) => ({
+            ...prev,
+            messages: [
+              ...prev.messages,
+              {
+                role: 'assistant',
+                stage1: response.stage1_results,
+                stage2: response.stage2_results,
+                stage3: response.stage3_result,
+                metadata: response.metadata,
+              },
+            ],
+          }));
 
-      if (error.message === 'Query stopped by user') {
-        return;
-      }
-
-      if (files.length > 0) {
-        setCurrentConversation((prev) => ({
-          ...prev,
-          messages: prev.messages.slice(0, -1),
-        }));
-      } else {
-        updateStreamingAssistant(null, (lastMsg) => {
-          lastMsg.status = 'failed';
-          lastMsg.error = error.message;
-          lastMsg.stage1 = [];
-          lastMsg.stage2 = [];
-          lastMsg.stage3 = {
-            model: 'quick',
-            status: 'failed',
-            response: `Error: ${error.message}`,
-            error_type: 'quick_stream_error',
-            error: error.message,
+          // Files are one-shot browser File objects. Sent file metadata stays on
+          // the message; the pending queue is cleared after success.
+          setAttachedFiles([]);
+        } else {
+          const assistantMessage = {
+            role: 'assistant',
+            status: 'running',
+            stage1: [],
+            stage2: [],
+            stage3: null,
+            metadata: { mode: 'quick' },
+            modelStatus: {
+              stage1: {},
+              stage2: {},
+              stage3: {},
+            },
+            loading: {
+              stage1: false,
+              stage2: false,
+              stage3: true,
+            },
           };
-          lastMsg.metadata = { ...(lastMsg.metadata || {}), mode: 'quick' };
-          lastMsg.loading.stage1 = false;
-          lastMsg.loading.stage2 = false;
-          lastMsg.loading.stage3 = false;
+
+          setCurrentConversation((prev) => ({
+            ...prev,
+            messages: [...prev.messages, assistantMessage],
+          }));
+
+          // No files, use quick streaming endpoint
+          await api.sendQuickMessageStream(currentConversationId, content, (eventType, event) => {
+            handleCouncilStreamEvent(eventType, event, null, draft);
+          });
+        }
+
+        // Reload conversations list and persisted turn audit.
+        loadConversations();
+        await loadConversationDetails(currentConversationId);
+      } catch (error) {
+        console.error('Failed to send quick message:', error);
+
+        if (error.message === 'Query stopped by user') {
+          return;
+        }
+
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: prev.messages.slice(0, hasFiles ? -1 : -2),
+        }));
+        setDraftToRestore({
+          ...draft,
+          restoreId: `${draft.id}-failed-${Date.now()}`,
         });
+      } finally {
+        setIsLoading(false);
+        setActiveStreamId(null);
+        setInFlightDraft(null);
       }
-    } finally {
-      setIsLoading(false);
-      setActiveStreamId(null);
-      setInFlightDraft(null);
-    }
+    })();
+
+    return true;
   };
 
   return (

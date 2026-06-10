@@ -1574,7 +1574,8 @@ export default function ChatInterface({
       return;
     }
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
-      onSendMessage(input, attachedFiles);
+      const accepted = onSendMessage(input, attachedFiles);
+      if (accepted === false) return;
       setInput('');
       clearSavedDraft();
       setContextPreview(null);
@@ -1590,7 +1591,8 @@ export default function ChatInterface({
       return;
     }
     if ((input.trim() || attachedFiles.length > 0) && !isLoading && onSendQuickMessage) {
-      onSendQuickMessage(input, attachedFiles);
+      const accepted = onSendQuickMessage(input, attachedFiles);
+      if (accepted === false) return;
       setInput('');
       clearSavedDraft();
       setContextPreview(null);
