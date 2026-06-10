@@ -111,6 +111,53 @@ describe('RichMarkdown', () => {
     expect(container).toHaveTextContent('普通括号 (text) 保持文本。');
   });
 
+  it('keeps rich content fixtures rendering without math false positives', async () => {
+    const fence = '```';
+    const longCode = Array.from({ length: 130 }, (_, index) => `line ${index + 1}`).join('\n');
+    const content = String.raw`标准块公式：
+
+$$
+E = mc^2
+$$
+
+松散块公式：
+
+[ \mathbf{e}_i = \text{Time2Vec}(\log(1+t_i)) ]
+
+松散行内公式包含 (\gamma)、(\Delta t) 和 (b(\cdot))。
+
+普通括号 (text) 保持文本，普通方括号 [note] 保持文本。
+
+- [ ] Markdown checklist item
+
+${fence}mermaid
+graph TD; A-->B;
+${fence}
+
+${fence}javascript
+${longCode}
+${fence}
+
+| Name | Value |
+| --- | --- |
+| Alpha | 1 |`;
+
+    const { container } = render(<RichMarkdown content={content} />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.rich-math-block')).toHaveLength(2);
+      expect(container.querySelectorAll('.rich-math-inline .katex')).toHaveLength(3);
+    });
+    expect(container).toHaveTextContent('普通括号 (text) 保持文本');
+    expect(container).toHaveTextContent('普通方括号 [note] 保持文本');
+    expect(screen.getByText('Markdown checklist item')).toBeInTheDocument();
+    expect(await screen.findByText('Copy source')).toBeInTheDocument();
+    expect(await screen.findByText('Preview')).toBeInTheDocument();
+    expect(container.querySelectorAll('.rich-mermaid-placeholder.error')).toHaveLength(0);
+    expect(screen.getByText(/Show all 130 lines/i)).toBeInTheDocument();
+    expect(await screen.findByText('Table')).toBeInTheDocument();
+  });
+
   it('clears table copy feedback timers when unmounted', async () => {
     const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
     const { unmount } = render(<RichMarkdown content={`| Name | Score |\n| --- | --- |\n| Alpha | 2 |`} />);
