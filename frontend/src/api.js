@@ -39,6 +39,22 @@ function filenameFromContentDisposition(disposition, fallback) {
   return filenameMatch?.[1] || fallback;
 }
 
+async function readErrorMessage(response, fallback) {
+  const contentType = response.headers.get('Content-Type') || '';
+  try {
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      if (typeof payload?.detail === 'string') return payload.detail;
+      if (payload?.detail) return JSON.stringify(payload.detail);
+      if (payload?.message) return String(payload.message);
+    }
+    const text = await response.text();
+    return text || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function parseSSEBlock(block) {
   const dataLines = [];
 
@@ -97,6 +113,17 @@ async function readSSEEvents(response, onEvent, controller) {
 }
 
 export const api = {
+  /**
+   * Get backend runtime version diagnostics.
+   */
+  async getVersion() {
+    const response = await fetch(`${API_BASE}/api/version`);
+    if (!response.ok) {
+      throw new Error('Failed to get backend version');
+    }
+    return response.json();
+  },
+
   /**
    * List all conversations.
    */
@@ -493,8 +520,8 @@ export const api = {
     const params = new URLSearchParams({ format });
     const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/export?${params.toString()}`);
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || 'Failed to export conversation');
+      const reason = await readErrorMessage(response, 'Failed to export conversation');
+      throw new Error(`Failed to export conversation ${conversationId}: ${reason}`);
     }
 
     const blob = await response.blob();

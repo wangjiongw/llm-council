@@ -28,7 +28,9 @@ const parseTimeout = (value) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 };
 
-export default function LLMSettingsModal({ open, onClose, api }) {
+const versionValue = (value) => value || '-';
+
+export default function LLMSettingsModal({ open, onClose, api, backendVersion }) {
   const [settings, setSettings] = useState(emptySettings);
   const [defaultApiKey, setDefaultApiKey] = useState('');
   const [overrideModel, setOverrideModel] = useState('');
@@ -195,6 +197,17 @@ export default function LLMSettingsModal({ open, onClose, api }) {
         </div>
 
         <div className="settings-grid">
+          <section className="settings-section settings-version-section">
+            <h3>Backend Status</h3>
+            <dl className="settings-version-list">
+              <div><dt>Commit</dt><dd>{versionValue(backendVersion?.commit)}</dd></div>
+              <div><dt>PID</dt><dd>{versionValue(backendVersion?.pid)}</dd></div>
+              <div><dt>Started</dt><dd>{versionValue(backendVersion?.started_at)}</dd></div>
+              <div><dt>Bind</dt><dd>{versionValue(backendVersion?.backend_host)}:{versionValue(backendVersion?.backend_port)}</dd></div>
+              <div><dt>Data</dt><dd>{versionValue(backendVersion?.data_dir)}</dd></div>
+            </dl>
+          </section>
+
           <section className="settings-section">
             <h3>Default Provider</h3>
             <label>

@@ -21,6 +21,7 @@ const clampSidebarWidth = (value) => {
 function App() {
   const [conversations, setConversations] = useState([]);
   const [conversationManagement, setConversationManagement] = useState({ tag_colors: {}, saved_views: [] });
+  const [backendVersion, setBackendVersion] = useState(null);
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [currentContextAudit, setCurrentContextAudit] = useState(null);
@@ -55,15 +56,20 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [convs, management] = await Promise.all([
+        const [convs, management, version] = await Promise.all([
           api.listConversations(),
           api.getConversationManagement().catch((error) => {
             console.warn('Failed to load conversation management:', error);
             return { tag_colors: {}, saved_views: [] };
           }),
+          api.getVersion().catch((error) => {
+            console.warn('Failed to load backend version:', error);
+            return null;
+          }),
         ]);
         setConversations(convs);
         setConversationManagement(management);
+        setBackendVersion(version);
       } catch (error) {
         console.error('Failed to load conversations:', error);
       }
@@ -283,7 +289,7 @@ function App() {
       return await api.exportConversation(conversationId, format);
     } catch (error) {
       console.error('Failed to export conversation:', error);
-      alert('Failed to export conversation. Please try again.');
+      alert(error.message || 'Failed to export conversation. Please try again.');
       throw error;
     }
   };
@@ -1162,6 +1168,7 @@ function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         api={api}
+        backendVersion={backendVersion}
       />
     </div>
   );

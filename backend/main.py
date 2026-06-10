@@ -9,6 +9,10 @@ import uuid
 import json
 import asyncio
 import copy
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -19,6 +23,24 @@ from .openrouter import query_model
 from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
 app = FastAPI(title="LLM Council API")
+BACKEND_STARTED_AT = datetime.now(timezone.utc).isoformat()
+
+
+def _current_commit() -> str:
+    env_commit = os.getenv("LLM_COUNCIL_COMMIT", "").strip()
+    if env_commit:
+        return env_commit
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=2,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _attachment_content_disposition(filename: str) -> str:
@@ -46,6 +68,20 @@ def _maybe_update_generated_title(conversation_id: str, title: str) -> Dict[str,
         locked=False,
         respect_lock=True,
     )
+
+
+@app.get("/api/version")
+async def get_version():
+    return {
+        "commit": _current_commit(),
+        "started_at": BACKEND_STARTED_AT,
+        "pid": os.getpid(),
+        "backend_host": os.getenv("BACKEND_HOST", "0.0.0.0"),
+        "backend_port": os.getenv("BACKEND_PORT", "8001"),
+        "data_dir": storage.DATA_DIR,
+        "python": sys.version.split()[0],
+    }
+
 
 # Enable CORS for local development
 app.add_middleware(

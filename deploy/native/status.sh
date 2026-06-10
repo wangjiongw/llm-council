@@ -50,9 +50,25 @@ if [[ -f "$PID_FILE" ]]; then
     echo "Backend running as PID $PID"
     echo "Log: $PROJECT_DIR/logs/backend.log"
     if command -v curl >/dev/null 2>&1; then
-      if curl -fsS --max-time 2 "http://$BACKEND_HOST:$BACKEND_PORT/api/conversations" >/dev/null; then
+      if version_json="$(curl -fsS --max-time 2 "http://$BACKEND_HOST:$BACKEND_PORT/api/version" 2>/dev/null)"; then
         echo "Backend API responded on $BACKEND_HOST:$BACKEND_PORT"
+        if command -v python3 >/dev/null 2>&1; then
+          VERSION_JSON="$version_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ.get("VERSION_JSON", "{}"))
+for key in ("commit", "pid", "started_at", "backend_host", "backend_port", "data_dir", "python"):
+    print(f"{key}: {payload.get(key, '-')}")
+PY
+        else
+          echo "$version_json"
+        fi
         exit 0
+      fi
+      if curl -fsS --max-time 2 "http://$BACKEND_HOST:$BACKEND_PORT/api/conversations" >/dev/null 2>&1; then
+        echo "Backend API responded, but /api/version did not. This may be an old backend process."
+        exit 1
       fi
       echo "Backend PID exists, but API did not respond on $BACKEND_HOST:$BACKEND_PORT"
       exit 1

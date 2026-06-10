@@ -56,6 +56,7 @@ if [[ "${BACKEND_USE_PROXY:-1}" == "0" || "${BACKEND_USE_PROXY:-}" == "false" ]]
 fi
 
 cd "$PROJECT_DIR"
+export LLM_COUNCIL_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 if [[ -x "$PROJECT_DIR/.venv/bin/python3" ]]; then
   backend_cmd=("$PROJECT_DIR/.venv/bin/python3" -m backend.main)
 elif command -v uv >/dev/null 2>&1; then
@@ -78,4 +79,5 @@ fi
 
 echo "Backend running as PID $pid"
 echo "Backend bind: $BACKEND_HOST:$BACKEND_PORT"
+echo "Backend commit: $LLM_COUNCIL_COMMIT"
 echo "Log: $LOG_FILE"
