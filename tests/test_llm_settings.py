@@ -52,6 +52,75 @@ class LLMSettingsTest(unittest.TestCase):
         self.assertEqual(default_config["chat_url"], "https://default.example/v1/chat/completions")
         self.assertEqual(override_config["chat_url"], "https://override.example/v1/chat/completions")
 
+    def test_provider_diagnostics_redacts_secrets_and_reports_model_readiness(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "default_provider": {
+                "base_url": "https://default.example/v1",
+                "api_key": "default-key",
+                "timeout": 45,
+                "stream": True,
+            },
+            "council_models": ["model-a", "model-b"],
+            "chairman_model": "model-b",
+            "quick_model": "model-c",
+            "title_model": "",
+            "summarization_model": "",
+            "model_overrides": {
+                "model-b": {
+                    "base_url": "https://override.example/v1",
+                    "api_key": "override-key",
+                    "timeout": 600,
+                    "stream": False,
+                },
+                "model-c": {
+                    "api_key": "",
+                    "enabled": False,
+                },
+            },
+        })
+
+        response = self.client.get("/api/settings/llm/diagnostics")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["read_only"])
+        self.assertEqual(payload["schema"], "llm_provider_diagnostics_v1")
+        self.assertNotIn("default-key", str(payload))
+        self.assertNotIn("override-key", str(payload))
+        self.assertEqual(payload["checks"]["rate_limit"], "not_checked")
+
+        by_model = {entry["model"]: entry for entry in payload["models"]}
+        self.assertEqual(by_model["model-a"]["base_url"], "https://default.example/v1")
+        self.assertTrue(by_model["model-a"]["api_key_set"])
+        self.assertEqual(by_model["model-b"]["provider_source"], "override")
+        self.assertEqual(by_model["model-b"]["timeout"], 600.0)
+        self.assertFalse(by_model["model-b"]["stream"])
+        self.assertIn("council", by_model["model-b"]["roles"])
+        self.assertIn("chairman", by_model["model-b"]["roles"])
+        self.assertIn("disabled_model", by_model["model-c"]["problems"])
+        self.assertEqual(payload["summary"]["configured_model_count"], 3)
+        self.assertEqual(payload["summary"]["problem_model_count"], 1)
+
+    def test_provider_diagnostics_reports_missing_default_provider_config(self):
+        llm_settings.save_llm_settings({
+            **llm_settings.DEFAULT_SETTINGS,
+            "default_provider": {"base_url": "", "api_key": "", "timeout": 0},
+            "council_models": ["missing-config-model"],
+            "chairman_model": "",
+            "quick_model": "",
+            "title_model": "",
+            "summarization_model": "",
+        })
+
+        response = self.client.get("/api/settings/llm/diagnostics")
+
+        self.assertEqual(response.status_code, 200)
+        model = response.json()["models"][0]
+        self.assertEqual(model["model"], "missing-config-model")
+        self.assertEqual(model["problems"], ["missing_base_url", "missing_api_key", "invalid_timeout"])
+
+
     def test_llm_settings_test_endpoint_calls_model(self):
         with patch(
             "backend.main.query_model",

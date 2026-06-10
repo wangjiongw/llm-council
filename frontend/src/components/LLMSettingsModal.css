@@ -197,6 +197,106 @@
   cursor: pointer;
 }
 
+.settings-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-section-title-row h3 {
+  margin: 0;
+}
+
+.provider-diagnostics-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-diagnostics-summary span,
+.provider-diagnostic-problems span {
+  padding: 3px 7px;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  background: #fff;
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.provider-diagnostics-list {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-diagnostic-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.3fr) minmax(96px, auto);
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid #eaeef2;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.provider-diagnostic-row.warn {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.08);
+}
+
+.provider-diagnostic-row strong,
+.provider-diagnostic-row span,
+.provider-diagnostic-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-diagnostic-row strong {
+  color: #24292f;
+  font-size: 12px;
+}
+
+.provider-diagnostic-row span {
+  color: #24292f;
+  font-size: 12px;
+}
+
+.provider-diagnostic-row small {
+  color: #6e7781;
+  font-size: 11px;
+}
+
+.provider-diagnostic-problems {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.provider-diagnostic-row.warn .provider-diagnostic-problems span {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.1);
+  color: #9a6700;
+}
+
+.settings-diagnostics-note {
+  margin: 0;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-secondary-btn.compact {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
 .settings-test-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(120px, auto);
@@ -274,7 +374,12 @@
 
   .settings-grid,
   .settings-two-col,
-  .settings-test-row {
+  .settings-test-row,
+  .provider-diagnostic-row {
     grid-template-columns: 1fr;
+  }
+
+  .provider-diagnostic-problems {
+    justify-content: flex-start;
   }
 }

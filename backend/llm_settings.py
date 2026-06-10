@@ -22,6 +22,18 @@ FALLBACK_MODEL_LIST_KEYS = {
     "summarization_fallback_models",
 }
 
+MODEL_ROLE_KEYS = [
+    ("council", "council_models", True),
+    ("chairman", "chairman_model", False),
+    ("chairman_fallback", "chairman_fallback_models", True),
+    ("quick", "quick_model", False),
+    ("quick_fallback", "quick_fallback_models", True),
+    ("title", "title_model", False),
+    ("title_fallback", "title_fallback_models", True),
+    ("summarization", "summarization_model", False),
+    ("summarization_fallback", "summarization_fallback_models", True),
+]
+
 
 def _env(*names: str) -> str:
     for name in names:
@@ -108,6 +120,92 @@ def public_llm_settings() -> Dict[str, Any]:
         public_overrides[model] = _redact_provider(override)
     public_settings["model_overrides"] = public_overrides
     return public_settings
+
+
+def _coerce_timeout(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _configured_model_roles(settings: Dict[str, Any]) -> Dict[str, List[str]]:
+    roles_by_model: Dict[str, List[str]] = {}
+    for role, key, is_list in MODEL_ROLE_KEYS:
+        value = settings.get(key, [] if is_list else "")
+        models = value if is_list and isinstance(value, list) else [value]
+        for model in models:
+            clean_model = str(model or "").strip()
+            if clean_model:
+                roles_by_model.setdefault(clean_model, []).append(role)
+    return roles_by_model
+
+
+def provider_diagnostics() -> Dict[str, Any]:
+    """Return read-only, secret-safe provider configuration diagnostics."""
+    settings = load_llm_settings()
+    default_provider = settings.get("default_provider", {}) or {}
+    overrides = settings.get("model_overrides", {}) or {}
+    roles_by_model = _configured_model_roles(settings)
+    models = []
+
+    for model, roles in roles_by_model.items():
+        override = overrides.get(model, {}) or {}
+        provider = dict(default_provider)
+        provider.update({key: value for key, value in override.items() if value not in (None, "")})
+
+        base_url = str(provider.get("base_url") or "").rstrip("/")
+        timeout = _coerce_timeout(provider.get("timeout"))
+        enabled = bool(provider.get("enabled", True))
+        problems = []
+        if not base_url:
+            problems.append("missing_base_url")
+        if not provider.get("api_key"):
+            problems.append("missing_api_key")
+        if timeout is None:
+            problems.append("invalid_timeout")
+        if not enabled:
+            problems.append("disabled_model")
+
+        models.append({
+            "model": model,
+            "roles": roles,
+            "provider_source": "override" if model in overrides else "default",
+            "base_url": base_url,
+            "chat_url": f"{base_url}/chat/completions" if base_url else "",
+            "api_key_set": bool(provider.get("api_key")),
+            "timeout": timeout,
+            "stream": bool(provider.get("stream", True)),
+            "enabled": enabled,
+            "problems": problems,
+        })
+
+    ready_models = [model for model in models if not model["problems"]]
+    problem_counts: Dict[str, int] = {}
+    for model in models:
+        for problem in model["problems"]:
+            problem_counts[problem] = problem_counts.get(problem, 0) + 1
+
+    return {
+        "schema": "llm_provider_diagnostics_v1",
+        "read_only": True,
+        "default_provider": _redact_provider(default_provider),
+        "configured_models": sorted(roles_by_model.keys()),
+        "models": models,
+        "summary": {
+            "configured_model_count": len(models),
+            "ready_model_count": len(ready_models),
+            "problem_model_count": len(models) - len(ready_models),
+            "problem_counts": problem_counts,
+        },
+        "checks": {
+            "connection": "not_run",
+            "model_list": "configured_only",
+            "rate_limit": "not_checked",
+            "reason": "Read-only diagnostics do not call the provider or expose secrets.",
+        },
+    }
 
 
 def resolve_model_config(model: str) -> Dict[str, Any]:

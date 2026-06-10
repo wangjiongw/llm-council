@@ -345,9 +345,9 @@ const ErrorActionPanel = memo(function ErrorActionPanel({ msg, canContinue, onCo
             LLM Settings
           </button>
         )}
-        {info.diagnostics && (
-          <button type="button" className="settings-inline-button" onClick={() => document.querySelector('.error-technical-details summary')?.click()}>
-            Diagnostics
+        {info.diagnostics && onOpenSettings && (
+          <button type="button" className="settings-inline-button" onClick={onOpenSettings}>
+            Provider Diagnostics
           </button>
         )}
       </div>

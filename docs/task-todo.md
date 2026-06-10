@@ -15,7 +15,8 @@
 - `673d824`：新增独立 Markdown export fixture 回归测试，覆盖 Quick、Council、中文标题、中断会话和历史脏数据。
 - `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
 - `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
-- 当前收口批次：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
+- `cbac6aa`：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
+- 当前 P1 执行批次：补齐 Council Run Summary 组件测试；新增只读 `/api/settings/llm/diagnostics`；设置弹窗展示 provider diagnostics；provider 相关错误可直达诊断入口。
 
 当前可用能力：
 
@@ -27,6 +28,8 @@
 - Markdown export 已具备恢复路径属性：即使历史会话存在部分中断数据，也应尽量导出可读内容。
 - 后端 pytest、前端 Vitest、lint、build、Playwright smoke 已成为常规验收命令。
 - native 后端部署现在可通过 `/api/version` 和 `deploy/native/status.sh` 识别旧进程、旧 commit、PID 和启动时间。
+- 设置弹窗现在提供只读 Provider Diagnostics，显示配置模型、base URL、API key 是否配置、timeout、stream/enabled 状态和缺配置问题；该诊断不调用 provider、不暴露 secrets。
+- Council Run Summary 已有组件级回归，覆盖成功/失败模型、fallback attempt、tokens、duration 和 warnings。
 - 备份/恢复流程见 `docs/conversation-backup-recovery.md`。
 - 快速验收、提交前验收、发布前验收命令矩阵见 `docs/regression-matrix.md`。
 
@@ -35,10 +38,13 @@
 - `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
 - `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
 - `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
+- `npm test -- ChatInterface.test.jsx LLMSettingsModal.test.jsx`：通过，`13 passed`。
+- `pytest tests/test_llm_settings.py tests/test_council_failures.py -q`：通过，`13 passed`。
+- `pytest tests/test_llm_settings.py tests/test_stage_model_status_events.py tests/test_quick_stream.py -q`：通过，`14 passed`。
 - `npm run lint`：通过。
 - `npm run build`：通过。
 - `bash deploy/native/stop-backend.sh && bash deploy/native/start-backend.sh && bash deploy/native/status.sh`：通过；status 显示 commit 与 `git rev-parse --short HEAD` 一致。
-- `npm run test:e2e`：通过，`5 passed`。
+- `npm run test:e2e`：通过，`8 passed`。
 
 当前仍需关注的工程风险：
 
@@ -91,18 +97,18 @@
    验收标准：历史会话增多后，常用会话能通过搜索、saved view、标签和批量操作快速整理。
 
 2. Council 可解释性。
-   - 在最终回答旁提供简洁贡献摘要：成功模型、失败模型、关键观点来源、是否 fallback。
-   - 对部分失败、all failed、chairman fallback、context limit、disabled model 给出不同提示。
-   - 汇总 duration、tokens、fallback attempts；usage 不完整时明确标注。
+   - 第一版已完成：最终回答旁已有 Council Run Summary，展示 Stage 1/2 成功失败数、chair 模型、失败模型数、fallback attempt、tokens、slowest duration 和 warnings。
+   - 第一版已补组件测试，覆盖成功模型、失败模型、fallback attempt、tokens、duration 和 warning。
+   - 后续可继续增强：关键观点来源的更细粒度引用、usage 缺失时的显式标注、all failed/chairman fallback 的更细文案。
 
-   验收标准：不展开 Stage1/Stage2 也能判断本轮是否可信、是否值得重试。
+   验收标准：不展开 Stage1/Stage2 也能判断本轮是否可信、是否值得重试。当前第一版已满足主要路径。
 
 3. Provider 和错误诊断产品化。
-   - ErrorActionPanel 根据错误类型给出入口：LLM settings、Context Policy、provider diagnostics、retry/resume。
-   - 增加只读 provider diagnostics：base URL、认证、模型列表、限流、超时。
-   - 对配置错误和网络错误给出可复制诊断信息。
+   - 第一版已完成：新增只读 `/api/settings/llm/diagnostics`，返回配置模型、角色、base URL、key 是否配置、timeout、stream/enabled、问题列表和 read-only 检查状态。
+   - 第一版已完成：设置弹窗展示 Provider Diagnostics；provider 相关错误面板提供 Provider Diagnostics 入口；技术细节仍可复制。
+   - 后续可继续增强：真实 provider 模型列表探测、限流探测和网络连通性探测需要显式用户触发，避免只读诊断产生外部调用。
 
-   验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。
+   验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。当前配置类和 provider 错误入口第一版已完成。
 
 4. 长会话性能和富内容效率。
    - 强化虚拟滚动：远距离搜索命中、turn 跳转、streaming 自动滚动、移动端窄屏。
@@ -145,8 +151,9 @@
 
 ## 建议执行顺序
 
-1. 进入 `P1-2` Council 可解释性和 `P1-3` Provider 诊断。
-   - 原因：Council 的价值依赖“为什么可信”和“失败后怎么办”，这两项应一起设计。
+1. `P1-2` Council 可解释性和 `P1-3` Provider 诊断第一版已完成。
+   - 已落地 Council Run Summary 测试、只读 provider diagnostics API、设置弹窗诊断面板和错误入口。
+   - 后续增强项保留为真实 provider 探测、关键观点来源引用和 usage 缺失标注。
 
 2. 推进 `P1-1` 会话管理产品化和 `P1-5` 输入工作流。
    - 原因：它们提升长期使用效率，并已建立 P0 可靠性测试护栏。
@@ -161,9 +168,9 @@
 
 建议下一轮只拿以下 4 个任务作为一个可完成批次：
 
-1. Council Run Summary：成功模型、失败模型、fallback、关键观点来源。
-2. Provider diagnostics：只读连接诊断、配置错误入口、可复制错误上下文。
-3. 会话管理分面增强：failed/files/memory/pinned 等筛选和 grouped result 操作。
-4. 输入工作流第一版：模式草稿持久化、retry with edit 预览、本地 prompt 模板入口。
+1. 会话管理分面增强：failed/files/memory/pinned 等筛选和 grouped result 操作。
+2. 输入工作流第一版：模式草稿持久化、retry with edit 预览、本地 prompt 模板入口。
+3. Provider diagnostics 第二版：显式触发的真实连接/模型列表/限流探测，不作为默认只读诊断。
+4. Council Run Summary 第二版：关键观点来源引用、usage 缺失标注、all failed/chairman fallback 专门文案。
 
-P0 可靠性批次已收口；下一轮可以开始做高频效率和可解释性。
+P0 可靠性批次已收口；P1 可解释性和 Provider 诊断第一版已完成。下一轮建议进入会话管理和输入工作流。

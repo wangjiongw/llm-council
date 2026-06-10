@@ -30,6 +30,15 @@ const parseTimeout = (value) => {
 
 const versionValue = (value) => value || '-';
 
+const problemLabel = (problem) => ({
+  missing_base_url: 'missing base URL',
+  missing_api_key: 'missing API key',
+  invalid_timeout: 'invalid timeout',
+  disabled_model: 'disabled',
+}[problem] || problem);
+
+const rolesLabel = (roles = []) => roles.join(', ') || 'unassigned';
+
 export default function LLMSettingsModal({ open, onClose, api, backendVersion }) {
   const [settings, setSettings] = useState(emptySettings);
   const [defaultApiKey, setDefaultApiKey] = useState('');
@@ -40,8 +49,10 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
   const [status, setStatus] = useState('');
   const [testModel, setTestModel] = useState('');
   const [testResult, setTestResult] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isRefreshingDiagnostics, setIsRefreshingDiagnostics] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,8 +61,12 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
       setStatus('Loading settings...');
       setTestResult(null);
       try {
-        const data = await api.getLLMSettings();
+        const [data, diagnosticsData] = await Promise.all([
+          api.getLLMSettings(),
+          api.getLLMProviderDiagnostics ? api.getLLMProviderDiagnostics() : Promise.resolve(null),
+        ]);
         setSettings({ ...emptySettings, ...data });
+        setDiagnostics(diagnosticsData);
         setDefaultApiKey('');
         setStatus('');
       } catch (error) {
@@ -68,9 +83,10 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
       settings.quick_model,
       settings.title_model,
       settings.summarization_model,
+      ...(diagnostics?.configured_models || []),
     ].filter(Boolean);
     return Array.from(new Set(models));
-  }, [settings]);
+  }, [settings, diagnostics]);
 
   if (!open) return null;
 
@@ -157,10 +173,23 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
       setSettings({ ...emptySettings, ...saved });
       setDefaultApiKey('');
       setStatus('Saved. New calls will use these settings.');
+      await refreshDiagnostics();
     } catch (error) {
       setStatus(error.message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const refreshDiagnostics = async () => {
+    if (!api.getLLMProviderDiagnostics) return;
+    setIsRefreshingDiagnostics(true);
+    try {
+      setDiagnostics(await api.getLLMProviderDiagnostics());
+    } catch (error) {
+      setDiagnostics({ error: error.message });
+    } finally {
+      setIsRefreshingDiagnostics(false);
     }
   };
 
@@ -206,6 +235,47 @@ export default function LLMSettingsModal({ open, onClose, api, backendVersion })
               <div><dt>Bind</dt><dd>{versionValue(backendVersion?.backend_host)}:{versionValue(backendVersion?.backend_port)}</dd></div>
               <div><dt>Data</dt><dd>{versionValue(backendVersion?.data_dir)}</dd></div>
             </dl>
+          </section>
+
+          <section className="settings-section settings-diagnostics-section">
+            <div className="settings-section-title-row">
+              <h3>Provider Diagnostics</h3>
+              <button className="settings-secondary-btn compact" onClick={refreshDiagnostics} disabled={isRefreshingDiagnostics}>
+                {isRefreshingDiagnostics ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+            {diagnostics?.error ? (
+              <p className="settings-diagnostics-note">{diagnostics.error}</p>
+            ) : diagnostics ? (
+              <>
+                <div className="provider-diagnostics-summary">
+                  <span>{diagnostics.summary?.ready_model_count || 0} ready</span>
+                  <span>{diagnostics.summary?.problem_model_count || 0} need attention</span>
+                  <span>rate limit {diagnostics.checks?.rate_limit || 'unknown'}</span>
+                  <span>connection {diagnostics.checks?.connection || 'unknown'}</span>
+                </div>
+                <div className="provider-diagnostics-list">
+                  {(diagnostics.models || []).map(model => (
+                    <div className={`provider-diagnostic-row ${model.problems?.length ? 'warn' : ''}`} key={model.model}>
+                      <div>
+                        <strong>{model.model}</strong>
+                        <small>{rolesLabel(model.roles)} · {model.provider_source} provider</small>
+                      </div>
+                      <div>
+                        <span>{model.base_url || 'no base URL'}</span>
+                        <small>key {model.api_key_set ? 'set' : 'missing'} · timeout {model.timeout || '-'}s · stream {model.stream ? 'on' : 'off'} · {model.enabled ? 'enabled' : 'disabled'}</small>
+                      </div>
+                      <div className="provider-diagnostic-problems">
+                        {model.problems?.length ? model.problems.map(problem => <span key={problem}>{problemLabel(problem)}</span>) : <span>ready</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="settings-diagnostics-note">{diagnostics.checks?.reason}</p>
+              </>
+            ) : (
+              <p className="settings-diagnostics-note">Diagnostics unavailable.</p>
+            )}
           </section>
 
           <section className="settings-section">

@@ -216,6 +216,76 @@ describe('ChatInterface conversation efficiency controls', () => {
     expect(onDraftRestored).toHaveBeenCalledWith('restore-1');
   });
 
+  it('shows a council run summary with model failures, fallback attempts, tokens, and timings', () => {
+    const conversation = {
+      id: 'conv-council-summary',
+      messages: [
+        { role: 'user', content: 'Explain reliability' },
+        {
+          role: 'assistant',
+          metadata: { mode: 'council', warnings: ['Stage 1 had 1 failed model call.'] },
+          stage1: [
+            { model: 'vendor/model-a', response: 'A', status: 'success', usage: { total_tokens: 12 }, duration_seconds: 4 },
+            { model: 'vendor/model-b', status: 'failed', error_type: 'timeout', error: 'slow' },
+          ],
+          stage2: [
+            { model: 'vendor/judge', ranking: 'A wins', status: 'success', usage: { total_tokens: 8 }, duration_seconds: 5 },
+          ],
+          stage3: {
+            response: 'Final synthesis',
+            status: 'success',
+            model: 'vendor/chair',
+            usage: { total_tokens: 20 },
+            duration_seconds: 6,
+            metadata: {
+              attempts: [
+                { model: 'vendor/primary-chair', ok: false, error_type: 'timeout', error: 'slow' },
+                { model: 'vendor/chair', ok: true },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    renderChat(conversation);
+
+    expect(screen.getByLabelText('Council run summary')).toBeInTheDocument();
+    expect(screen.getByText('Stage 1 1/2, 1 failed')).toBeInTheDocument();
+    expect(screen.getByText('Stage 2 1/1')).toBeInTheDocument();
+    expect(screen.getByText('Chair chair')).toBeInTheDocument();
+    expect(screen.getByText('2 model failures')).toBeInTheDocument();
+    expect(screen.getByText('1 fallback attempt')).toBeInTheDocument();
+    expect(screen.getByText('40 tokens')).toBeInTheDocument();
+    expect(screen.getByText('slowest 6s')).toBeInTheDocument();
+    expect(screen.getByText('Stage 1 had 1 failed model call.')).toBeInTheDocument();
+  });
+
+  it('opens provider diagnostics from provider-related error actions', async () => {
+    const user = userEvent.setup();
+    const onOpenSettings = vi.fn();
+    const conversation = {
+      id: 'conv-provider-error',
+      messages: [
+        { role: 'user', content: 'Why did this fail?' },
+        {
+          role: 'assistant',
+          metadata: { mode: 'council' },
+          status: 'failed',
+          stage1: [],
+          stage2: [],
+          stage3: { status: 'failed', response: '', model: 'vendor/chair', error_type: 'timeout', error: 'provider timed out' },
+        },
+      ],
+    };
+
+    renderChat(conversation, { onOpenSettings });
+
+    expect(screen.getByText('Provider request did not complete')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Provider Diagnostics/i }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('does not submit when Enter commits IME composition', async () => {
     const onSendMessage = vi.fn();
     const conversation = { id: 'conv-ime', messages: [] };

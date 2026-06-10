@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 from . import storage
 from .council import run_full_council_with_history, generate_initial_title, generate_conversation_title_from_context, stage1_collect_responses_streaming, stage2_collect_rankings_streaming, stage3_synthesize_final_with_history, calculate_aggregate_rankings, quick_query, has_successful_stage1_results, has_successful_stage2_results, build_label_to_model_from_stage1_results, build_quick_messages, _build_stage1_messages, _build_stage2_messages, build_stage3_messages_with_history
-from .llm_settings import public_llm_settings, update_llm_settings
+from .llm_settings import public_llm_settings, update_llm_settings, provider_diagnostics
 from .openrouter import query_model
 from .provider_audit import canonical_digest, make_provider_request_audit, provider_source_map, redaction_policy
 
@@ -1062,6 +1062,12 @@ async def patch_llm_settings(request: UpdateLLMSettingsRequest):
     """Update runtime LLM settings."""
     updates = request.model_dump(exclude_none=True)
     return update_llm_settings(updates) and public_llm_settings()
+
+
+@app.get("/api/settings/llm/diagnostics")
+async def get_llm_provider_diagnostics():
+    """Return read-only provider diagnostics with secrets redacted."""
+    return provider_diagnostics()
 
 
 @app.post("/api/settings/llm/test")

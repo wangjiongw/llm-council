@@ -300,7 +300,7 @@ pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_convers
 
 ```bash
 cd frontend
-npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
+npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx LLMSettingsModal.test.jsx
 npm run lint
 npm run build
 ```

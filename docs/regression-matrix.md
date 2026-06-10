@@ -24,7 +24,7 @@ pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_convers
 
 ```bash
 cd frontend
-npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
+npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx LLMSettingsModal.test.jsx
 ```
 
 ## 提交前验收
@@ -35,7 +35,7 @@ npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
 pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q
 pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q
 cd frontend
-npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
+npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx LLMSettingsModal.test.jsx
 npm run lint
 npm run build
 ```

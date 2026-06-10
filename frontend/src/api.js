@@ -852,6 +852,17 @@ export const api = {
   },
 
   /**
+   * Get read-only provider diagnostics.
+   */
+  async getLLMProviderDiagnostics() {
+    const response = await fetch(`${API_BASE}/api/settings/llm/diagnostics`);
+    if (!response.ok) {
+      throw new Error('Failed to get LLM provider diagnostics');
+    }
+    return response.json();
+  },
+
+  /**
    * Update runtime LLM settings.
    */
   async updateLLMSettings(settings) {
