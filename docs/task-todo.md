@@ -16,15 +16,15 @@
 - `6873da2`：新增 ChatInterface 组件测试和 Playwright smoke，覆盖 Council / Quick 发送失败恢复草稿、成功发送清空草稿、Quick 重复点击不重复落库。
 - `c551ad4`：新增 RichMarkdown 富内容 fixture 测试，覆盖标准公式、松散公式、普通括号/方括号反例、Markdown checklist、Mermaid、长代码和表格。
 - `cbac6aa`：新增 fork branch Council / Quick 发送失败恢复与成功发送 Playwright smoke；新增公式 + Mermaid 页面级 rich content smoke；新增 conversations 备份/恢复文档；新增标准回归命令矩阵。
-- 当前 P1 执行批次：完成会话管理分面第一版和输入工作流第一版；会话列表支持 failed/files/memory/pinned 分面，搜索结果支持组级展开/收起；输入框支持模式随草稿持久化、Retry with edit 预览和本地 prompt 模板入口。
+- 当前 P1 执行批次：完成 P1-4 长会话性能和富内容效率第一版；100+ turn 移动端 smoke 覆盖虚拟列表、远距离搜索命中和流式追加可见；RichMarkdown 缓存 Mermaid 成功/失败结果，避免重复渲染同一坏图。
 
 当前可用能力：
 
 - Quick / Council 两种对话模式可用，支持 resume / retry / fork / branch 等基础恢复路径。
 - 会话列表具备时间分组、搜索、收藏、归档、标签、置顶、批量操作、saved views 和 failed/files/memory/pinned 分面筛选基础能力。
-- 会话内搜索、左侧历史搜索、命中跳转、搜索结果组级展开/收起、长会话虚拟滚动试点已可支撑日常定位。
+- 会话内搜索、左侧历史搜索、命中跳转、搜索结果组级展开/收起、长会话虚拟滚动和移动端 100+ turn smoke 已可支撑日常定位。
 - Context preview / replay / policy / memory / pin / exclude 已构成基础上下文管理链路。
-- Markdown、代码、表格、Mermaid、KaTeX/LaTeX 渲染已具备增强操作和懒渲染基础。
+- Markdown、代码、表格、Mermaid、KaTeX/LaTeX 渲染已具备增强操作、懒渲染和 bounded cache 基础；Mermaid 错误会缓存并保留源码 fallback。
 - Markdown export 已具备恢复路径属性：即使历史会话存在部分中断数据，也应尽量导出可读内容。
 - 输入框草稿按 conversation 保存输入文本和 Quick/Council 模式，兼容旧纯文本草稿；Retry with edit 会显示将使用的模式、内容长度和重建 turn。
 - 本地 prompt 模板入口已提供总结、翻译、代码 review、debug、测试生成和文档整理模板。
@@ -49,10 +49,13 @@
 - `npm run test:e2e`：通过，`8 passed`。
 - `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
 - `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
+- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`26 passed`。
+- `E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"`：通过，`2 passed`；该命令使用临时 Vite dev server 验证当前源码。
 
 当前仍需关注的工程风险：
 
 - Playwright 发送 smoke 使用受控 SSE mock，不覆盖真实 provider outage、限流或慢响应链路。
+- 当前 native/nginx 入口可能仍运行旧静态资源；验证当前源码的 e2e 需先启动临时 Vite dev server 并设置 `E2E_BASE_URL`。
 - 输入工作流第一版暂不持久化待上传文件队列，`/` 命令菜单也尚未落地；当前仅提供本地模板选择入口。
 - 会话管理第一版覆盖 failed/files/memory/pinned 常用分面和搜索结果组级展开/收起；tag/favorite/archive 搜索分面、批量整理撤销仍待后续。
 - 备份/恢复文档已经固化，但尚未在一次真实历史备份恢复演练中执行全流程。
@@ -87,6 +90,8 @@
 - `npm run test:e2e`：通过，`8 passed`。
 - `pytest tests/test_conversation_metadata_api.py tests/test_conversation_search_api.py -q`：通过，`13 passed`。
 - `npm test -- ChatInterface.test.jsx Sidebar.test.jsx`：通过，`26 passed`。
+- `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`26 passed`。
+- `E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"`：通过，`2 passed`；该命令使用临时 Vite dev server 验证当前源码。
 - `pytest tests/test_conversation_export_api.py tests/test_version_api.py tests/test_conversation_metadata_api.py -q`：通过，`12 passed, 5 subtests passed`。
 - `pytest tests/test_quick_stream.py tests/test_resume_stream.py tests/test_conversation_fork_api.py -q`：通过，`11 passed`。
 - `npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx`：通过，`17 passed`。
@@ -120,12 +125,12 @@
    验收标准：常见 provider/config/context 错误能在 UI 中看到下一步动作，而不是只看堆栈或泛化错误。当前配置类和 provider 错误入口第一版已完成。
 
 4. 长会话性能和富内容效率。
-   - 强化虚拟滚动：远距离搜索命中、turn 跳转、streaming 自动滚动、移动端窄屏。
-   - 评估 Markdown AST 缓存，减少同一消息重复 parse。
-   - Mermaid / KaTeX 改成更细的块级懒渲染和错误缓存。
-   - 表格增加 XLSX 导出、列宽控制、表内命中计数。
+   - 第一版已完成：100+ turn 移动端 Playwright smoke 覆盖虚拟列表、远距离搜索命中、Bottom 导航和 Quick stream 追加可见。
+   - 第一版已完成：虚拟列表 `scrollToBottom` 在长会话中按估算总高度更新窗口，避免 Bottom/streaming 停在中间 turn。
+   - 第一版已完成：Mermaid 成功/失败渲染进入 bounded cache；失败时显示错误和源码，不重复渲染同一坏图。
+   - 后续可继续增强：Markdown AST 更细粒度缓存、KaTeX/Mermaid 块级错误统计、表格 XLSX 导出、列宽控制和表内命中计数。
 
-   验收标准：100+ turn 会话打开、搜索、跳转、滚动不卡到不可用；富内容不阻塞首屏交互。
+   验收标准：100+ turn 会话打开、搜索、跳转、滚动不卡到不可用；富内容不阻塞首屏交互。当前第一版已覆盖移动端长会话 search/bottom/stream smoke 和 Mermaid 错误缓存。
 
 5. 输入工作流。
    - 第一版已完成：草稿按 conversation 持久化输入文本和 Quick/Council 模式，并兼容旧纯文本草稿。
@@ -170,10 +175,11 @@
    - 已落地 failed/files/memory/pinned 会话分面、搜索结果组级展开/收起、模式草稿持久化、Retry with edit 预览和本地 prompt 模板入口。
    - 后续增强项保留为搜索 tag/favorite/archive 分面、批量整理撤销、文件队列持久化和 `/` 命令菜单。
 
-3. 下一步推进 `P1-4` 长会话性能和富内容效率。
-   - 原因：页面级 rich content smoke 已建立，后续可以更安全地优化懒渲染和缓存。
+3. `P1-4` 长会话性能和富内容效率第一版已完成。
+   - 已落地虚拟化 Bottom/streaming 可见性修复、100+ turn 移动端 smoke、Mermaid 成功/失败 bounded cache 和错误 fallback 回归。
+   - 后续增强项保留为 Markdown AST 更细缓存、KaTeX/Mermaid 统计、表格 XLSX/列宽/命中计数。
 
-4. 再回到 `P1-2` / `P1-3` 第二版增强。
+4. 下一步回到 `P1-2` / `P1-3` 第二版增强。
    - 原因：真实 provider 探测会产生外部调用，Council 来源引用也需要更稳定的展示模型，适合在高频使用效率完成后单独推进。
 
 5. 最后进入 `P2` 工程结构整理。
@@ -183,9 +189,9 @@
 
 建议下一轮只拿以下 4 个任务作为一个可完成批次：
 
-1. `P1-4` 长会话性能 smoke 扩展：100+ turn fixture、远距离搜索命中跳转、streaming 自动滚动和移动端窄屏检查。
-2. 富内容效率第一版：评估 Markdown parse 缓存边界，给 Mermaid / KaTeX 懒渲染和错误缓存补组件级保护。
+1. Provider diagnostics 第二版：显式触发真实连接/模型列表/限流探测，不作为默认只读诊断。
+2. Council Run Summary 第二版：关键观点来源引用、usage 缺失标注、all failed/chairman fallback 专门文案。
 3. 会话管理剩余小项：tag/favorite/archive 搜索分面、批量整理撤销提示或最近操作记录。
 4. 输入工作流剩余小项：待上传文件队列持久化和 `/` 命令菜单。
 
-P0 可靠性批次已收口；P1 可解释性、Provider 诊断第一版、会话管理第一版和输入工作流第一版已完成。下一轮建议进入长会话性能和富内容效率。
+P0 可靠性批次已收口；P1 可解释性、Provider 诊断第一版、会话管理第一版、输入工作流第一版、长会话性能和富内容效率第一版已完成。下一轮建议进入 Provider diagnostics 第二版和 Council Run Summary 第二版。

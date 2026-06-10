@@ -34,6 +34,13 @@ cd frontend
 npm test -- ChatInterface.test.jsx Sidebar.test.jsx
 ```
 
+前端长会话 / 富内容效率：
+
+```bash
+cd frontend
+npm test -- ChatInterface.test.jsx RichMarkdown.test.jsx
+```
+
 ## 提交前验收
 
 适用：任何会影响发送、导出、渲染、部署诊断或主页面状态的代码改动。
@@ -78,7 +85,16 @@ E2E_BASE_URL=http://127.0.0.1:18080 npm run test:e2e
 - 主题切换后主聊天控件仍可见。
 - 普通 Council / Quick 发送失败恢复草稿，成功发送清空草稿。
 - fork branch Council / Quick 发送失败恢复草稿，成功发送只追加一个 user turn。
+- 100+ turn 移动端长会话：虚拟列表、远距离搜索命中、Bottom 导航和 Quick stream 追加可见。
 - 公式和 Mermaid 在真实消息视图中渲染出非空节点且无 error placeholder。
+
+验证当前源码但不重启 native/nginx 时，先启动临时 Vite server，再指定 `E2E_BASE_URL`：
+
+```bash
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 18180
+E2E_BASE_URL=http://127.0.0.1:18180 npx playwright test tests/e2e/acceptance-smoke.spec.js -g "100 turn mobile|formula and Mermaid"
+```
 
 ## 备份/恢复验收
 
